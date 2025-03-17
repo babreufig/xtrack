@@ -25,6 +25,7 @@ start_per_part_block = """
     const int64_t XT_part_block_end_idx = LocalParticle_get__num_active_particles(part0); //only_for_context cpu_serial
 
     //#pragma omp simd // TODO: currently does not work, needs investigating
+    #pragma GCC ivdep
     for (int64_t XT_part_block_ii = XT_part_block_start_idx; XT_part_block_ii<XT_part_block_end_idx; XT_part_block_ii++) { //only_for_context cpu_openmp cpu_serial
 
         LocalParticle lpart = *part0;    //only_for_context cpu_serial cpu_openmp

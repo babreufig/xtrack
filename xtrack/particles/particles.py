@@ -1409,11 +1409,11 @@ class Particles(xo.HybridClass):
             src_lines.append('                 ' + tt._c_type + '  ' + vv + ';')
 
         for tt, vv in cls.per_particle_vars:
-            src_lines.append('    /*gpuglmem*/ ' + tt._c_type + '* ' + vv + ';')
+            src_lines.append('    /*gpuglmem*/ ' + tt._c_type + '* restrict ' + vv + ';')
 
         src_lines.append('                 int64_t ipart;')
         src_lines.append('                 int64_t endpart;')
-        src_lines.append('    /*gpuglmem*/ int8_t* io_buffer;')
+        src_lines.append('    /*gpuglmem*/ int8_t* restrict io_buffer;')
         src_lines.append('} LocalParticle;')
         src_typedef = '\n'.join(src_lines)
 

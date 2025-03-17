@@ -423,7 +423,7 @@ class Tracker:
     def _build_kernel(
             self,
             compile: Union[bool, Literal['force']],
-            module_name=None,
+            module_name="myfile", # TODO: Remove when merging
             containing_dir='.',
             extra_classes=[],
             extra_kernels={},
@@ -682,6 +682,10 @@ class Tracker:
             specialize=True,
             compile=compile,
             save_source_as=f'{module_name}.c' if module_name else None,
+            # TODO: Remove when merging (debug flags)
+            extra_compile_args=("-O3", "-Wno-unused-function", "-march=native",
+                                "-fopt-info-vec", "-ftree-vectorize",
+                                "-ftree-vectorizer-verbose=1"),
             **kwargs,
         )
         return out_kernels['track_line']
