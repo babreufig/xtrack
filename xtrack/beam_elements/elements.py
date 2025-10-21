@@ -3858,9 +3858,9 @@ class LineSegmentMap(BeamElement):
         assert damping_rate_py >= 0.0
         assert damping_rate_zeta >= 0.0
         assert damping_rate_pzeta >= 0.0
-        
+
         if (damping_rate_x > 0.0 or damping_rate_px > 0.0
-                or damping_rate_y > 0.0 or damping_rate_py > 0.0 
+                or damping_rate_y > 0.0 or damping_rate_py > 0.0
                 or damping_rate_zeta > 0.0 or damping_rate_pzeta > 0.0):
             assert damping_matrix is None
             nargs['uncorrelated_rad_damping'] = True
@@ -4185,7 +4185,10 @@ class ElectronCoolerRecord(xo.HybridClass):
         'Fx': xo.Float64[:],
         'Fy': xo.Float64[:],
         'Fl': xo.Float64[:],
-        'particle_id': xo.Float64[:]}
+        'particle_id': xo.Float64[:]
+    }
+
+
 class ElectronCooler(BeamElement):
     """
     Beam element modeling an electron cooler. In particular, this beam element uses the Parkhomchuk model for electron cooling.
@@ -4219,7 +4222,7 @@ class ElectronCooler(BeamElement):
         magnetic_field_ratio : float, optional
             The ratio of perpendicular component of magnetic field with the
             longitudinal component of the magnetic field. This is a measure
-            of the magnetic field quality. With the ideal magnetic field quality 
+            of the magnetic field quality. With the ideal magnetic field quality
             being 0.
         space_charge : float, optional
             Whether space charge of electron beam is enabled. 0 is off and 1 is on.
@@ -4293,6 +4296,48 @@ class ElectronCooler(BeamElement):
 
     def get_backtrack_element(self, _context=None, _buffer=None, _offset=None):
         raise NotImplementedError
+
+
+class TPSAMap(BeamElement):
+    """First order Taylor map.
+
+    Parameters
+    ----------
+    length : float
+        length of the element in meters.
+    monomials : array_like
+        Two-dimensional array of the monomials of the TPSA map.
+        Shape: (number of monomials, number of variables)
+    coefficients : array_like
+        One-dimensional array of the coefficients of the TPSA map.
+        Shape: (number of monomials)
+    """
+
+    isthick = True
+
+    _xofields = {
+        'length': xo.Float64,
+        'x_monomials': xo.Ref(xo.Int8[:])[:],
+        'px_monomials': xo.Ref(xo.Int8[:])[:],
+        'y_monomials': xo.Ref(xo.Int8[:])[:],
+        'py_monomials': xo.Ref(xo.Int8[:])[:],
+        'zeta_monomials': xo.Ref(xo.Int8[:])[:],
+        'delta_monomials': xo.Ref(xo.Int8[:])[:],
+        'x_coefficients': xo.Float64[:],
+        'px_coefficients': xo.Float64[:],
+        'y_coefficients': xo.Float64[:],
+        'py_coefficients': xo.Float64[:],
+        'zeta_coefficients': xo.Float64[:],
+        'delta_coefficients': xo.Float64[:],
+        'base_coordinates': xo.Float64[6],
+        'map_machine_vals': xo.Float64[:],
+        'machine_vals': xo.Float64[:],
+    }
+
+    _extra_c_sources = [
+        '#include <beam_elements/elements_src/tpsa_map.h>',
+    ]
+
 
 class ThinSliceNotNeededError(Exception):
     pass
