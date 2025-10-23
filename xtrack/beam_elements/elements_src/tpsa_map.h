@@ -22,12 +22,18 @@ void TPSAMap_track_local_particle(TPSAMapData el, LocalParticle* part0){
 
     START_PER_PARTICLE_BLOCK(part0, part);
         LocalParticle_add_to_s(part, length);
-        double x = taylor_expansion_single(TPSAMapData_getp_x_monomials(el), TPSAMapData_getp_x_coefficients(el), base_coordinates, machine_vals, map_machine_vals, part);
-        double px = taylor_expansion_single(TPSAMapData_getp_px_monomials(el), TPSAMapData_getp_px_coefficients(el), base_coordinates, machine_vals, map_machine_vals, part);
-        double y = taylor_expansion_single(TPSAMapData_getp_y_monomials(el), TPSAMapData_getp_y_coefficients(el), base_coordinates, machine_vals, map_machine_vals, part);
-        double py = taylor_expansion_single(TPSAMapData_getp_py_monomials(el), TPSAMapData_getp_py_coefficients(el), base_coordinates, machine_vals, map_machine_vals, part);
-        double zeta = taylor_expansion_single(TPSAMapData_getp_zeta_monomials(el), TPSAMapData_getp_zeta_coefficients(el), base_coordinates, machine_vals, map_machine_vals, part);
-        double delta = taylor_expansion_single(TPSAMapData_getp_delta_monomials(el), TPSAMapData_getp_delta_coefficients(el), base_coordinates, machine_vals, map_machine_vals, part);
+        double x = taylor_expansion_single(TPSAMapData_getp_x_monomials(el), TPSAMapData_getp_x_coefficients(el),
+            base_coordinates, machine_vals, map_machine_vals, part);
+        double px = taylor_expansion_single(TPSAMapData_getp_px_monomials(el), TPSAMapData_getp_px_coefficients(el),
+            base_coordinates, machine_vals, map_machine_vals, part);
+        double y = taylor_expansion_single(TPSAMapData_getp_y_monomials(el), TPSAMapData_getp_y_coefficients(el),
+            base_coordinates, machine_vals, map_machine_vals, part);
+        double py = taylor_expansion_single(TPSAMapData_getp_py_monomials(el), TPSAMapData_getp_py_coefficients(el),
+            base_coordinates, machine_vals, map_machine_vals, part);
+        double zeta = taylor_expansion_single(TPSAMapData_getp_zeta_monomials(el), TPSAMapData_getp_zeta_coefficients(el),
+            base_coordinates, machine_vals, map_machine_vals, part);
+        double delta = taylor_expansion_single(TPSAMapData_getp_delta_monomials(el), TPSAMapData_getp_delta_coefficients(el),
+            base_coordinates, machine_vals, map_machine_vals, part);
 
         LocalParticle_set_x(part, x);
         LocalParticle_set_px(part, px);
