@@ -308,7 +308,7 @@ def _tw_ng(line, rdts=(), normal_form=False,
             NG_XS_MAP.get(k, k): v for k, v in tw_kwargs.items()
         }
 
-        tw = line.twiss(reverse=False, **xs_tw_kwargs)
+        tw = line.twiss(method='4d', reverse=False, **xs_tw_kwargs)
 
     if not xsuite_tw:
         # Handle wrap-around range
