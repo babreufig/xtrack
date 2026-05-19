@@ -1606,7 +1606,6 @@ class Particles(xo.HybridClass):
     def gamma0(self, value):
         self.gamma0[:] = value
 
-
     def update_beta0(self, new_beta0):
 
         """

@@ -643,7 +643,6 @@ def element_to_mad_str(
         el = line._element_dict[el.parent_name]
 
     parent_flag = hasattr(el, '_parent')
-
     if (el.__class__ == xt.Marker or el.__class__ in element_types_converted_to_markers
         or parent_flag and el._parent.__class__ == xt.Marker):
         return marker_to_mad_str(name, line, mad_type=mad_type, substituted_vars=substituted_vars)
