@@ -818,9 +818,11 @@ class ActionTwiss(xd.Action):
 
 class MeritFunctionLine(xd.MeritFunctionForMatch):
     def __init__(
-            self,
-            merit_function_match,
-            use_tpsa=False,
+        self,
+        merit_function_match,
+        use_tpsa=False,
+        use_jax=False,
+        use_jax_residual=False,
     ):
 
         self.vary = merit_function_match.vary
@@ -836,10 +838,48 @@ class MeritFunctionLine(xd.MeritFunctionForMatch):
         self.show_call_counter = merit_function_match.show_call_counter
         self.check_limits = merit_function_match.check_limits
         self.use_tpsa = use_tpsa
+        self.use_jax = use_jax
+        # Opt-in: evaluate the residual from the JAX primal instead of a twiss.
+        # Only used once the JAX backend is built and supports the residual
+        # (optics targets)
+        # NOTE: the JAX section entrance optics (p0/s0) are frozen at build
+        # time, so this is exact for a fixed-init section match (entrance is
+        # knob-independent).
+        self.use_jax_residual = use_jax_residual
+        self._jax_jac = None
+
+    def __call__(self, x=None, check_limits=None, return_scalar=None, zero_if_met=None):
+        # Fast residual: temporarily swap the twiss action's output for the
+        # JAX primal target values, then let the *unchanged* base merit logic
+        # (target eval, transforms, tolerances, weights, state) run on it.
+        use_residuals = (
+            self.use_jax
+            and self.use_jax_residual
+            and self._jax_jac is not None
+            and self._jax_jac.has_values()
+        )
+        if use_residuals:
+            # Temporarily remove action to avoid redundant Twiss call
+            action = self.actions[0]
+            orig_run = action.run
+            action.run = lambda: self._jax_jac.values()
+        try:
+            return super().__call__(
+                x,
+                check_limits=check_limits,
+                return_scalar=return_scalar,
+                zero_if_met=zero_if_met,
+            )
+        finally:
+            # Set action back to normal
+            if use_residuals:
+                action.run = orig_run
 
     def get_jacobian(self, x=None, f0=None):
         if self.use_tpsa:
             return self.get_jacobian_tpsa(x)
+        elif self.use_jax:
+            return self.get_jacobian_jax(x)
         else:
             return super().get_jacobian(x, f0=f0)
 
@@ -866,17 +906,68 @@ class MeritFunctionLine(xd.MeritFunctionForMatch):
 
         return jacobian
 
-class OptimizeLine(xd.Optimize):
+    def get_jacobian_jax(self, x=None):
+        """Exact-physics Jacobian via the unified JAX backend (`jax_match`).
 
-    def __init__(self, line, vary, targets, assert_within_tol=True,
-                    compensate_radiation_energy_loss=False,
-                    solver_options={}, allow_twiss_failure=True,
-                    restore_if_fail=True, verbose=False,
-                    n_steps_max=20, default_tol=None,
-                    solver=None, check_limits=True,
-                    action_twiss=None, action_twiss_ng=None,
-                    use_tpsa=False, name="",
-                    **kwargs):
+        Targets are classified into optics / global (tune-chroma) / orbit and a
+        single ``JaxJacobian`` differentiates the matching exact-map quantity
+        w.r.t. the knobs.  Only the Jacobian is produced here - the residual is
+        still evaluated by the normal twiss in ``__call__`` (see jax_summary §7).
+        """
+        from .jax_match import JaxJacobian, classify_jax_targets
+
+        if x is not None and not np.allclose(x, self._get_x(), rtol=1e-12, atol=0):
+            self._set_x(x)
+
+        if self._jax_jac is None:
+            tw = self.actions[0].run()
+            self._jax_kind = classify_jax_targets(self.targets, TargetRelPhaseAdvance)
+            if self._jax_kind is None:
+                raise NotImplementedError(
+                    "use_jax: targets are not a single supported category "
+                    "(optics / global tune-chroma / orbit)"
+                )
+            self._jax_jac = JaxJacobian(
+                self.actions[0].line,
+                tw,
+                self._jax_kind,
+                self.targets,
+                [v.name for v in self.vary],
+                TargetRelPhaseAdvance,
+            )
+
+        jac = self._jax_jac.jacobian()  # (n_target, n_vary)
+        for i, tar in enumerate(self.targets):
+            jac[i] *= tar.weight
+
+        self._last_jac = jac
+        return jac
+
+
+class OptimizeLine(xd.Optimize):
+    def __init__(
+        self,
+        line,
+        vary,
+        targets,
+        assert_within_tol=True,
+        compensate_radiation_energy_loss=False,
+        solver_options={},
+        allow_twiss_failure=True,
+        restore_if_fail=True,
+        verbose=False,
+        n_steps_max=20,
+        default_tol=None,
+        solver=None,
+        check_limits=True,
+        action_twiss=None,
+        action_twiss_ng=None,
+        use_tpsa=False,
+        use_jax=False,
+        use_jax_residual=False,
+        name="",
+        **kwargs,
+    ):
 
         if hasattr(targets, 'values'): # dict like
             targets = list(targets.values())
@@ -1000,6 +1091,19 @@ class OptimizeLine(xd.Optimize):
                 else:
                     tt.tol = default_tol
 
+        if use_jax:
+            from .jax_match import classify_jax_targets
+
+            if classify_jax_targets(targets_flatten, TargetRelPhaseAdvance) is None:
+                print(
+                    "Warning: use_jax is set to True, but the targets are "
+                    "not a single supported category (optics / tune-chroma "
+                    "/ orbit); falling back to FD."
+                )
+                use_jax = False
+        if use_jax_residual and not use_jax:
+            print("Warning: use_jax_residual requires use_jax=True; ignoring.")
+            use_jax_residual = False
 
         xd.Optimize.__init__(self,
                         vary=vary_flatten, targets=targets_flatten, solver=solver,
@@ -1010,7 +1114,12 @@ class OptimizeLine(xd.Optimize):
                         check_limits=check_limits,
                         name=name)
 
-        _err = MeritFunctionLine(self._err, use_tpsa=use_tpsa)
+        _err = MeritFunctionLine(
+            self._err,
+            use_tpsa=use_tpsa,
+            use_jax=use_jax,
+            use_jax_residual=use_jax_residual,
+        )
         self.line = line
         self.action_twiss = action_twiss
         self.default_tol = default_tol
