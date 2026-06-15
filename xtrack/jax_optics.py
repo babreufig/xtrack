@@ -7,10 +7,12 @@ transfer-matrix approximation: the per-element transfer matrix R is obtained as
 ``jax.jacfwd`` of the exact map around the closed orbit, and the Twiss
 parameters are propagated through the section with the standard formulas.
 
-Only the Jacobian d(target)/d(knob) is produced here; the residual itself is
-still evaluated by the normal xtrack twiss.  Supported target quantities are
-``betx, alfx, mux, bety, alfy, muy, dx, dpx, dy, dpy`` (and relative phase
-advance), matched against quadrupole-knob varies.
+The Jacobian d(target)/d(knob) is the primary product, but the same machinery
+(``build_section_twiss``) also evaluates the primal target values, so the
+residual can be read from the exact JAX maps too (used by ``jax_match`` when
+``use_jax_residual`` is set, in place of a fresh xtrack twiss).  Supported target
+quantities are ``betx, alfx, mux, bety, alfy, muy, dx, dpx, dy, dpy`` (and
+relative phase advance), matched against quadrupole-knob varies.
 
 Performance design:
   * factorization - the closed orbit through a matched section is ~0 and
@@ -518,13 +520,13 @@ def emap_jax(state, row, kq, ks, corr, beta0):
     )
 
 
-def encode_section(line, ordered_names, kq_index, want_edges=True):
+def encode_section(line, ordered_names, kq_index):
     """Encode every section element into an :class:`Enc` (optics layout).
 
     Linear-focusing elements (Quadrupole, Bend, RBend) get their exact map;
     thick non-focusing elements are drifts; thin elements apply their linear
     multipole kick.  Quads named in ``kq_index`` read k1 from the live kq vector.
-    Dipole edges are encoded when ``want_edges`` (the optics default).
+    Dipole edges are always encoded (the optics model).
     """
     ed = line.element_dict
     rows = []
@@ -545,7 +547,7 @@ def encode_section(line, ordered_names, kq_index, want_edges=True):
                 raise NotImplementedError(
                     f"combined-function bend {nm} not supported by use_jax"
                 )
-            r = bend_edge_coeffs(e) if want_edges else (0.0, 0.0, 0.0, 0.0)
+            r = bend_edge_coeffs(e)
             rows.append(
                 {
                     "etype": ET_BEND, "L": length, "k0": k0v, "h": hv,

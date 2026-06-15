@@ -911,8 +911,10 @@ class MeritFunctionLine(xd.MeritFunctionForMatch):
 
         Targets are classified into optics / global (tune-chroma) / orbit and a
         single ``JaxJacobian`` differentiates the matching exact-map quantity
-        w.r.t. the knobs.  Only the Jacobian is produced here - the residual is
-        still evaluated by the normal twiss in ``__call__`` (see jax_summary §7).
+        w.r.t. the knobs.  This only produces the Jacobian; the residual is
+        evaluated by the normal twiss in ``__call__`` unless ``use_jax_residual``
+        is set and the backend supports it (optics), in which case the residual
+        is read from the JAX primal instead (see jax_summary §7).
         """
         from .jax_match import JaxJacobian, classify_jax_targets
 
