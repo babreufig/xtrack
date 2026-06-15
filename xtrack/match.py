@@ -823,6 +823,7 @@ class MeritFunctionLine(xd.MeritFunctionForMatch):
         use_tpsa=False,
         use_jax=False,
         use_jax_residual=False,
+        use_jax_integrators=False,
     ):
 
         self.vary = merit_function_match.vary
@@ -846,6 +847,9 @@ class MeritFunctionLine(xd.MeritFunctionForMatch):
         # time, so this is exact for a fixed-init section match (entrance is
         # knob-independent).
         self.use_jax_residual = use_jax_residual
+        # Xsuite integrator physics for the optics Jacobian/residual
+        # (see jax_integrators). Optics kind only.
+        self.use_jax_integrators = use_jax_integrators
         self._jax_jac = None
 
     def __call__(self, x=None, check_limits=None, return_scalar=None, zero_if_met=None):
@@ -936,6 +940,7 @@ class MeritFunctionLine(xd.MeritFunctionForMatch):
                 self.targets,
                 [v.name for v in self.vary],
                 TargetRelPhaseAdvance,
+                use_integrators=self.use_jax_integrators,
             )
 
         jac = self._jax_jac.jacobian()  # (n_target, n_vary)
@@ -967,6 +972,7 @@ class OptimizeLine(xd.Optimize):
         use_tpsa=False,
         use_jax=False,
         use_jax_residual=False,
+        use_jax_integrators=False,
         name="",
         **kwargs,
     ):
@@ -1093,16 +1099,29 @@ class OptimizeLine(xd.Optimize):
                 else:
                     tt.tol = default_tol
 
+        # use_jax_integrators is a refinement of the JAX backend
+        # (xsuite integrator physics for optics targets), so it auto-enables it.
+        if use_jax_integrators:
+            use_jax = True
         if use_jax:
             from .jax_match import classify_jax_targets
 
-            if classify_jax_targets(targets_flatten, TargetRelPhaseAdvance) is None:
+            jax_kind = classify_jax_targets(targets_flatten, TargetRelPhaseAdvance)
+            if jax_kind is None:
                 print(
                     "Warning: use_jax is set to True, but the targets are "
                     "not a single supported category (optics / tune-chroma "
                     "/ orbit); falling back to FD."
                 )
                 use_jax = False
+                use_jax_integrators = False
+            elif use_jax_integrators and jax_kind != "optics":
+                print(
+                    "Warning: use_jax_integrators currently supports only "
+                    "optics targets; using the default JAX maps for this "
+                    f"'{jax_kind}' match."
+                )
+                use_jax_integrators = False
         if use_jax_residual and not use_jax:
             print("Warning: use_jax_residual requires use_jax=True; ignoring.")
             use_jax_residual = False
@@ -1121,6 +1140,7 @@ class OptimizeLine(xd.Optimize):
             use_tpsa=use_tpsa,
             use_jax=use_jax,
             use_jax_residual=use_jax_residual,
+            use_jax_integrators=use_jax_integrators,
         )
         self.line = line
         self.action_twiss = action_twiss
@@ -1166,7 +1186,7 @@ class OptimizeLine(xd.Optimize):
             vary.extend(add_vary)
 
         out = self.__class__(
-            line = self.line,
+            line=self.line,
             vary=vary,
             targets=targets,
             default_tol=self.default_tol,
@@ -1176,6 +1196,10 @@ class OptimizeLine(xd.Optimize):
             n_steps_max=self.n_steps_max,
             check_limits=self.check_limits,
             action_twiss=self.action_twiss,
+            use_tpsa=self._err.use_tpsa,
+            use_jax=self._err.use_jax,
+            use_jax_residual=self._err.use_jax_residual,
+            use_jax_integrators=self._err.use_jax_integrators,
             name=name,
         )
         return out

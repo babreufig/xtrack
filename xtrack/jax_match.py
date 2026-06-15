@@ -86,7 +86,8 @@ class JaxJacobian:
     (encode + XLA compile) and reused every Newton step.
     """
 
-    def __init__(self, line, tw, kind, targets, vary_names, TargetRelPhaseAdvance):
+    def __init__(self, line, tw, kind, targets, vary_names, TargetRelPhaseAdvance,
+                 use_integrators=False):
         self.line = line
         self._ed = line.element_dict
         self.kind = kind
@@ -94,6 +95,11 @@ class JaxJacobian:
         self.beta0 = float(tw.particle_on_co.beta0[0])
         self.ordered = list(tw.name[:-1])
         self.n_vary = len(vary_names)
+        # Physics layer for the optics kind: False -> the jax_optics maps
+        # (mat-kick-mat quad, 2-half curved bend); True -> the faithful xsuite
+        # integrator dispatch from jax_integrators (resolve_magnet + Yoshida-4).
+        # global/orbit ignore this and always use the jax_optics maps.
+        self.use_integrators = use_integrators
         # Optional residual (primal) evaluator; set only where implemented
         # (optics).  None -> the caller keeps using the normal twiss residual.
         self._values = None
@@ -166,7 +172,6 @@ class JaxJacobian:
         quads = [n for n in ordered if type(ed.get(n)).__name__ == "Quadrupole"]
         varied, dk1 = scalar_chain(self.line, self.vary_names, "k1", quads)
         kq_index = {q: i for i, q in enumerate(varied)}
-        enc = encode_section(self.line, ordered, kq_index)
 
         # atoms (unique quantity@place) + per-target sign combos
         section_start, section_end = tw.name[0], tw.name[-2]
@@ -201,10 +206,30 @@ class JaxJacobian:
             orig_rows.append(max(r, 0))
         atom_zero = np.array(atom_zero, dtype=bool)
 
-        cenc, orig_to_comp = compress_encoding(enc, set(orig_rows))
+        # Two interchangeable physics layers behind the same targets_fn /
+        # orig_to_comp interface: the faithful integrator dispatch or the
+        # jax_optics maps. Both compress (merge drifts, drop identities) so the
+        # scan/vmap runs over far fewer rows; compression is lossless at the
+        # boundary rows any target reads.
+        if self.use_integrators:
+            from . import jax_integrators as ji
+
+            # Boundaries = every place a target reads: the jacobian end-places
+            # (orig_rows) plus the residual's phase-advance start-places.
+            boundary = set(orig_rows)
+            for tt in targets:
+                if isinstance(tt, TRP):
+                    start = section_start if tt.start == "__ele_start__" else tt.start
+                    boundary.add(max(name_to_row[start], 0))
+            enc_i, sigs = ji.encode_section(self.line, ordered, kq_index)
+            cenc, orig_to_comp = ji.compress_encoding(enc_i, boundary)
+            targets_fn = ji.build_section_twiss(cenc, sigs, self.beta0, p0, s0)
+        else:
+            enc = encode_section(self.line, ordered, kq_index)
+            cenc, orig_to_comp = compress_encoding(enc, set(orig_rows))
+            targets_fn = build_section_twiss(cenc, self.beta0, p0, s0)
         rows = jnp.array([int(orig_to_comp[r]) for r in orig_rows], dtype=jnp.int32)
         qidx = jnp.array([TW_INDEX[q] for q, _ in atoms], dtype=jnp.int32)
-        targets_fn = build_section_twiss(cenc, self.beta0, p0, s0)
         jac_fn = jax.jit(jax.jacfwd(lambda kq: targets_fn(kq, rows, qidx)))
         jac_fn(jnp.asarray([float(ed[q].k1) for q in varied]))  # warm
 
