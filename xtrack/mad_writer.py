@@ -94,6 +94,55 @@ def _handle_tokens_madng(tokens, substituted_vars):
 
 _ge = xt.elements._get_expr
 
+
+# MAD-NG integration model ('DKD'/'TKT') per Xsuite resolved model index
+# (the ``model`` field of resolve_magnet, not its drift_model).  Thick-body
+# models (bend-kick-bend=2, rot-kick-rot=3, mat-kick-mat=4, rot-kick-rot-low-
+# order=7) map into MAD-NG's TKT; the DKD-expanded model (6) and the exact
+# drift-kick-drift model (5) map to DKD.
+_NG_TKT_MODELS = (2, 3, 4, 7)
+
+
+def _madng_method(cfg):
+    """Map an Xsuite resolved integrator/model to the MAD-NG ``method`` order."""
+    integrator = cfg["integrator"]
+    if integrator == "yoshida4":
+        return 6  # Xsuite "yoshida4" uses MAD-NG's yosh6 coefficients
+    if integrator == "yoshida2":
+        return 2
+    # uniform / teapot: faithful order depends on the resolved body model
+    return 2 if cfg["model"] == 6 else 4
+
+
+def _madng_integration_tokens(el, mad_type):
+    """MAD-NG ``model``/``method`` tokens for a thick magnet.
+
+    Resolves the element's Xsuite ``adaptive`` model/integrator via
+    ``jax_integrators.resolve_magnet`` and maps to the MAD-NG model/method.
+
+    Emits ``model`` + ``method``.
+    ``nslice`` is NOT emitted: MAD-NG floors per-element nslice at the global
+    value (default 3), so emitting it can only over-integrate.
+    Emits nothing for MAD-X or if the resolver is unavailable.
+    """
+    if mad_type != MadType.MADNG:
+        return []
+    if not isinstance(
+        el, (xt.Bend, xt.RBend, xt.Quadrupole, xt.Sextupole, xt.Octupole)
+    ):
+        return []
+    try:
+        from xtrack.jax_integrators import resolve_magnet
+    except Exception:
+        return []
+    try:
+        cfg = resolve_magnet(el)
+    except Exception:
+        return []
+    ng_model = "TKT" if cfg["model"] in _NG_TKT_MODELS else "DKD"
+    return [f"model = '{ng_model}'", f"method = {_madng_method(cfg)}"]
+
+
 def _knl_ksl_to_mad(mult, mad_type=MadType.MADX):
 
     rel_token_suffix = ''
@@ -618,6 +667,15 @@ xsuite_to_mad_converters = {
     xt.ACDipole: acdipole_to_mad_str,
 }
 
+# Thick magnets that get per-element MAD-NG model/method emitted.
+_MADNG_INTEGRATION_CLASSES = (
+    xt.Bend,
+    xt.RBend,
+    xt.Quadrupole,
+    xt.Sextupole,
+    xt.Octupole,
+)
+
 element_types_converted_to_markers = {
     xt.LimitEllipse,
     xt.LimitPolygon,
@@ -632,9 +690,17 @@ def element_to_mad_str(
     line,
     mad_type=MadType.MADX,
     substituted_vars=None,
+    include_integration=False,
 ):
     """
     Generic converter for elements to MADX/MAD-NG.
+
+    ``include_integration`` (MAD-NG only): when True, thick non-sliced magnets
+    carry per-element ``model``/``method`` resolved from their Xsuite
+    ``adaptive`` config (see ``_madng_integration_tokens``), aligning MAD-NG's
+    integration model/method with Xsuite's resolved scheme.  Not an exact
+    match: ``nslice`` is left at MAD-NG's global value and the method mapping
+    approximates Xsuite's integrator.  True by default in ``line_to_madng``.
     """
 
     el = line._element_dict[env_name]
@@ -660,6 +726,19 @@ def element_to_mad_str(
             raise NotImplementedError(f"Element of type {el.__class__} not supported yet in MAD writer")
     else:
         tokens = xsuite_to_mad_converters[el.__class__](eref, mad_type=mad_type, substituted_vars=substituted_vars)
+
+    # Per-element MAD-NG integration model/method, emitted only for thick,
+    # *non-sliced* magnets (``el`` is the magnet itself, not a slice class).
+    # Slices already encode their integration via the slicing, so forcing the
+    # parent's resolved scheme onto a thin slice would over-integrate and
+    # corrupt e.g. the chromatic W functions - hence the class gate here rather
+    # than inside the per-element converters.
+    if (
+        mad_type == MadType.MADNG
+        and include_integration
+        and el.__class__ in _MADNG_INTEGRATION_CLASSES
+    ):
+        tokens += _madng_integration_tokens(el, mad_type)
 
     if el.__class__ not in [xt.Drift, xt.DriftSlice]:
         _handle_transforms(tokens, eref, mad_type=mad_type, substituted_vars=substituted_vars)
@@ -729,7 +808,7 @@ def to_madx_sequence(line, name='seq', mode='sequence'):
     mad_input = vars_str + '\n' + machine_str + '\n'
     return mad_input
 
-def to_madng_sequence(line, name='seq'):
+def to_madng_sequence(line, name="seq", include_integration=False):
     code_str = ""
     chunk_start = "(function()\t -- Begin chunk\n"
     chunk_end = "end)();\t -- End chunk\n"
@@ -771,7 +850,14 @@ def to_madng_sequence(line, name='seq'):
 
         el = line._element_dict[tt.env_name[ii]]
 
-        el_str = element_to_mad_str(nn, tt.env_name[ii], line, mad_type=MadType.MADNG, substituted_vars=substituted_vars)
+        el_str = element_to_mad_str(
+            nn,
+            tt.env_name[ii],
+            line,
+            mad_type=MadType.MADNG,
+            substituted_vars=substituted_vars,
+            include_integration=include_integration,
+        )
 
         if el_str is None:
             continue

@@ -1215,7 +1215,11 @@ def line_to_madng(line, sequence_name='seq', temp_fname=None, keep_files=False,
             temp_fname = 'temp_madng_' + str(uuid.uuid4())
 
         from .mad_writer import to_madng_sequence
-        madx_seq = to_madng_sequence(line, name=sequence_name)
+
+        include_integration = kwargs.pop("include_integration", True)
+        madx_seq = to_madng_sequence(
+            line, name=sequence_name, include_integration=include_integration
+        )
         with open(f'{temp_fname}.mad', 'w') as fid:
             fid.write(madx_seq)
 

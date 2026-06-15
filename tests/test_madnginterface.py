@@ -8,6 +8,171 @@ from xtrack._temp import lhc_match as lm
 test_data_folder = pathlib.Path(
     __file__).parent.joinpath('../test_data').absolute()
 
+
+# ---------------------------------------------------------------------------
+# Track tests (newly implemented madng_track)
+# ---------------------------------------------------------------------------
+
+# Initial conditions: mm-scale positions, µrad-scale momenta.
+# Momenta are negative (opposite sign w.r.t. orbit = 0).
+_TRACK_X0, _TRACK_PX0, _TRACK_Y0, _TRACK_PY0 = 1e-3, -1e-6, 0.5e-3, -2e-6
+
+
+def _build_fodo_line(
+    quad_model, quad_integrator, bend_model, bend_integrator, num_kicks
+):
+    """Simple FODO-like line: drift – QF – drift – bend – drift – QD – drift."""
+    env = xt.Environment()
+    env.particle_ref = xt.Particles(p0c=7e12, mass0=xt.PROTON_MASS_EV)
+    env.vars.default_to_zero = True
+    env["kqf"] = 0.30
+    env["kqd"] = -0.32
+    qkw = dict(
+        length=0.5,
+        model=quad_model,
+        integrator=quad_integrator,
+        num_multipole_kicks=num_kicks,
+        edge_entry_active=False,
+        edge_exit_active=False,
+    )
+    # k0 is set explicitly (= angle/length) so that both Xsuite and MAD-NG
+    # use a consistent dipole field strength.
+    bkw = dict(
+        angle=0.05,
+        length=2.0,
+        k0=0.025,
+        k1=0.0,
+        model=bend_model,
+        integrator=bend_integrator,
+        num_multipole_kicks=num_kicks,
+        edge_entry_active=False,
+        edge_exit_active=False,
+    )
+    env.new("d1", xt.Drift, length=1.0, model="exact")
+    env.new("qf", xt.Quadrupole, k1="kqf", **qkw)
+    env.new("d2", xt.Drift, length=1.0, model="exact")
+    env.new("mb", xt.Bend, **bkw)
+    env.new("d3", xt.Drift, length=1.0, model="exact")
+    env.new("qd", xt.Quadrupole, k1="kqd", **qkw)
+    env.new("d4", xt.Drift, length=1.0, model="exact")
+    env.new("end", xt.Marker)
+    line = env.new_line(components=["d1", "qf", "d2", "mb", "d3", "qd", "d4", "end"])
+    line.particle_ref = env.particle_ref
+    return line
+
+
+@pytest.mark.parametrize(
+    "quad_model,quad_integrator,bend_model,bend_integrator,madng_method,"
+    "num_kicks,atol,zeta_atol",
+    [
+        # Low-order schemes (1 kick): Xsuite's single Yoshida-4 bend slice vs
+        # MAD-NG's exact dipole map leaves an O(1e-9) transverse / O(4e-8) zeta
+        # truncation residual (see comment in the body).
+        pytest.param(
+            "mat-kick-mat",
+            "uniform",
+            "bend-kick-bend",
+            "uniform",
+            2,
+            1,
+            1e-8,
+            1e-7,
+            id="mat-kick-mat_bkb_uniform",
+        ),
+        pytest.param(
+            "mat-kick-mat",
+            "uniform",
+            "rot-kick-rot",
+            "yoshida4",
+            6,
+            1,
+            1e-8,
+            1e-7,
+            id="mat-kick-mat_rkr_yoshida4",
+        ),
+        pytest.param(
+            "mat-kick-mat",
+            "yoshida4",
+            "rot-kick-rot",
+            "yoshida4",
+            6,
+            1,
+            1e-8,
+            1e-7,
+            id="mat-kick-mat_yoshida4_rkr_yoshida4",
+        ),
+        # Converged case: many bend slices drive Xsuite's Yoshida-4 splitting to
+        # MAD-NG's exact map, so ALL coords (incl. zeta) agree to 1e-12.
+        pytest.param(
+            "mat-kick-mat",
+            "yoshida4",
+            "rot-kick-rot",
+            "yoshida4",
+            6,
+            140,
+            1e-12,
+            1e-12,
+            id="rkr_yoshida4_converged",
+        ),
+    ],
+)
+def test_madng_track_integrators(
+    quad_model,
+    quad_integrator,
+    bend_model,
+    bend_integrator,
+    madng_method,
+    num_kicks,
+    atol,
+    zeta_atol,
+):
+    """MAD-NG tracking agrees with Xsuite tracking through a simple FODO cell."""
+    line = _build_fodo_line(
+        quad_model, quad_integrator, bend_model, bend_integrator, num_kicks
+    )
+
+    # Xsuite track
+    particles = line.build_particles(
+        x=_TRACK_X0, px=_TRACK_PX0, y=_TRACK_Y0, py=_TRACK_PY0
+    )
+    line.track(particles)
+
+    # MAD-NG track
+    tw_ng = line.madng_track(
+        x=_TRACK_X0,
+        px=_TRACK_PX0,
+        y=_TRACK_Y0,
+        py=_TRACK_PY0,
+        method=madng_method,
+        nslice=num_kicks,
+    )
+
+    # The residual is set by the bend: Xsuite's `rot-kick-rot`/yoshida4 with
+    # `num_multipole_kicks` kicks does ceil(num_kicks/7) Yoshida-4 slices, while
+    # MAD-NG's TKT/method=6 is analytically exact for a pure dipole (nmul==0 ->
+    # thickonly). With 1 kick (1 slice) the splitting truncation leaves ~1e-9 on
+    # the transverse coords (amplified from ~3e-10 at the bend by the downstream
+    # QD) and ~4e-8 on zeta - path length is the most splitting-sensitive
+    # coordinate (|zeta|~5e-5, so ~8e-4 relative). The error converges as 4th
+    # order in the slice count, so the `_converged` case (140 kicks = 20 slices)
+    # reaches Xsuite's exact-dipole limit and agrees with MAD-NG to 1e-12.
+    xo.assert_allclose(
+        float(particles.x[0]), tw_ng["x_ng", "_end_point"], atol=atol, rtol=0
+    )
+    xo.assert_allclose(
+        float(particles.px[0]), tw_ng["px_ng", "_end_point"], atol=atol, rtol=0
+    )
+    xo.assert_allclose(
+        float(particles.y[0]), tw_ng["y_ng", "_end_point"], atol=atol, rtol=0
+    )
+    xo.assert_allclose(
+        float(particles.py[0]), tw_ng["py_ng", "_end_point"], atol=atol, rtol=0
+    )
+    xo.assert_allclose(
+        float(particles.zeta[0]), tw_ng["zeta_ng", "_end_point"], atol=zeta_atol, rtol=0
+    )
+
+
 def test_madng_twiss():
     rdts = ["f4000", "f3100", "f2020", "f1120"]
 
