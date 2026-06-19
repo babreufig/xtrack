@@ -2215,12 +2215,8 @@ class Line:
         if not self._has_valid_tracker():
             self.build_tracker()
 
-        if reverse is None:
-            reverse = self.twiss_default.get('reverse', False)
-
         return survey_from_line(self, X0=X0, Y0=Y0, Z0=Z0, theta0=theta0,
-                                   phi0=phi0, psi0=psi0, element0=element0,
-                                   reverse=reverse)
+                                   phi0=phi0, psi0=psi0, element0=element0)
 
     @doc_group("Matching and Corrections")
     def correct_trajectory(self, run=True, n_iter='auto', start=None, end=None,
@@ -4468,9 +4464,8 @@ class Line:
         for ee, nn in zip(self._elements, self.element_names):
             if (isinstance(ee, Multipole) and nn not in keep and
                 not(ee.isthick and ee.length != 0)):
-                ctx2np = ee._context.nparray_from_context_array
-                aux = ([ee.hxl]
-                        + list(ctx2np(ee.knl)) + list(ctx2np(ee.ksl)))
+                knl, ksl = ee.get_total_knl_ksl()
+                aux = [ee.hxl, ee.rot_x_rad, ee.rot_y_rad, *knl, *ksl]
                 if np.sum(np.abs(np.array(aux))) == 0.0:
                     continue
             newline.append(nn)
@@ -4681,8 +4676,9 @@ class Line:
 
         for name, element in self._element_dict.items():
             if _is_simple_quadrupole(element):
+                knl, _ = element.get_total_knl_ksl()
                 fast_quad = beam_elements.SimpleThinQuadrupole(
-                    knl=element.knl[:2],
+                    knl=knl[:2],
                     _context=element._context,
                 )
                 self._element_dict[name] = fast_quad
@@ -4699,8 +4695,9 @@ class Line:
 
         for name, element in self._element_dict.items():
             if _is_simple_dipole(element):
+                knl, _ = element.get_total_knl_ksl()
                 fast_di = beam_elements.SimpleThinBend(
-                    knl=element.knl[:1],
+                    knl=knl[:1],
                     hxl=element.hxl,
                     length=element.length,
                     _context=element._context,
@@ -4912,20 +4909,21 @@ class Line:
                 if (isinstance(prev_ee, Multipole)
                     and not prev_ee.isthick
                     and prev_ee.hxl == ee.hxl == 0
+                    and not _has_transverse_rotation(ee)
+                    and not _has_transverse_rotation(prev_ee)
                     and prev_nn not in keep
                 ):
-                    oo = max(len(prev_ee.knl), len(prev_ee.ksl),
-                           len(ee.knl), len(ee.ksl))
+                    prev_knl, prev_ksl = prev_ee.get_total_knl_ksl()
+                    ee_knl, ee_ksl = ee.get_total_knl_ksl()
+                    oo = max(len(prev_knl), len(prev_ksl),
+                           len(ee_knl), len(ee_ksl))
                     knl = np.zeros(oo,dtype=float)
                     ksl = np.zeros(oo,dtype=float)
-                    for ii, kk in enumerate(prev_ee._xobject.knl):
-                        knl[ii] += kk
-                    for ii, kk in enumerate(ee._xobject.knl):
-                        knl[ii] += kk
-                    for ii, kk in enumerate(prev_ee._xobject.ksl):
-                        ksl[ii] += kk
-                    for ii, kk in enumerate(ee._xobject.ksl):
-                        ksl[ii] += kk
+                    knl[:len(prev_knl)] += prev_knl
+                    knl[:len(ee_knl)] += ee_knl
+                    ksl[:len(prev_ksl)] += prev_ksl
+                    ksl[:len(ee_ksl)] += ee_ksl
+                    knl, ksl = _trim_common_trailing_zeros(knl, ksl)
                     newee = Multipole(
                         knl=knl, ksl=ksl, hxl=prev_ee.hxl,
                         length=prev_ee.length,
@@ -5488,7 +5486,7 @@ class Line:
 
         Returns
         -------
-        vars : object
+        vars : xtrack.environment.EnvVars
             Dictionary-like container of variables.
         """
         if hasattr(self, '_in_multiline') and self._in_multiline is not None:
@@ -6208,6 +6206,8 @@ class Line:
                 '_own_ks': AttrDefinition(name='ks'),
                 '_own_ks_profile_0': AttrDefinition(name='ks_profile', index=0),
                 '_own_ks_profile_1': AttrDefinition(name='ks_profile', index=1),
+                '_own_bs_mean': AttrDefinition(name='bs', index=4),
+                '_own_scale_b': AttrDefinition(name='scale_b'),
 
                 '_own_k0': AttrDefinition(name='k0'),
                 '_own_k1': AttrDefinition(name='k1'),
@@ -6445,6 +6445,7 @@ class Line:
                 'k5sl': lambda attr: attr['_k5sl_no_rel'] + attr['_k5sl_rel'] * attr['_main_strength'],
                 'ks': lambda attr: (attr['_own_ks'] + attr['_parent_ks'] * attr._inherit_strengths
                                     + 0.5 * (attr['_own_ks_profile_0'] + attr['_own_ks_profile_1'])),
+                'bs': lambda attr: attr['_own_bs_mean'] * attr['_own_scale_b'],
                 'hkick': lambda attr: attr["angle"] - attr["k0l"],
                 'vkick': lambda attr: attr["k0sl"],
             }
@@ -6548,6 +6549,68 @@ class Line:
 
 
 class LineTable(Table):
+    """
+    Table returned by :meth:`xtrack.Line.get_table`.
+
+    ``LineTable`` stores one row per line element plus the ``'_end_point'`` row.
+    It summarizes the line layout: element names, element types, longitudinal
+    positions, lengths, thickness flags, and optional element attributes.
+    """
+
+    def __init__(self, data, *args, **kwargs):
+        """
+        Create a line table.
+
+        Parameters
+        ----------
+        data : mapping
+            Mapping containing line-table columns. Typical columns include
+            ``name``, ``element_type``, ``s``, ``length``, ``isthick``, and
+            optional element attributes.
+        *args
+            Additional positional arguments passed to :class:`xtrack.Table`.
+        **kwargs
+            Additional keyword arguments passed to :class:`xtrack.Table`.
+
+        Examples
+        --------
+        Build a compact line table:
+
+        >>> import numpy as np
+        >>> from xtrack.line import LineTable
+        >>> tab = LineTable({
+        ...     "name": np.array(["mqf.1", "d1.1", "mb1.1", "_end_point"],
+        ...                      dtype=object),
+        ...     "element_type": np.array(["Quadrupole", "Drift", "Bend", ""],
+        ...                              dtype=object),
+        ...     "s": np.array([0.0, 0.3, 1.3, 4.3]),
+        ...     "length": np.array([0.3, 1.0, 3.0, 0.0]),
+        ...     "isthick": np.array([True, True, True, False]),
+        ... })
+        >>> tab
+        LineTable: 4 rows, 5 cols
+        name       element_type             s        length isthick
+        mqf.1      Quadrupole               0           0.3    True
+        d1.1       Drift                  0.3             1    True
+        mb1.1      Bend                   1.3             3    True
+        _end_point                        4.3             0   False
+
+        Select columns or rows:
+
+        >>> tab.cols["s length"]
+        LineTable: 4 rows, 3 cols
+        name                   s        length
+        mqf.1                  0           0.3
+        d1.1                 0.3             1
+        mb1.1                1.3             3
+        _end_point           4.3             0
+        >>> tab.rows.match(element_type="Drift|Bend")
+        LineTable: 2 rows, 5 cols
+        name  element_type             s        length isthick
+        d1.1  Drift                  0.3             1    True
+        mb1.1 Bend                   1.3             3    True
+        """
+        super().__init__(data, *args, **kwargs)
 
     # Messages to be shown when accessing deprecated fields
     _DEPRECATED_FIELDS = {
@@ -6566,22 +6629,39 @@ def _deserialize_element(el, class_dict, _buffer):
 def _is_simple_quadrupole(el):
     if not isinstance(el, Multipole) or el.isthick:
         return False
+    knl, ksl = el.get_total_knl_ksl()
     return (el.radiation_flag == 0
-            and (el.order == 1 or len(el.knl) == 2 or not any(el.knl[2:]))
-            and el.knl[0] == 0
-            and not any(el.ksl)
+            and (len(knl) <= 2 or not any(knl[2:]))
+            and knl[0] == 0
+            and not any(ksl)
             and not el.hxl
+            and not _has_transverse_rotation(el)
             and el.shift_x == 0 and el.shift_y == 0 and el.shift_s == 0
             and np.abs(el.rot_s_rad) < 1e-12)
 
 def _is_simple_dipole(el):
     if not isinstance(el, Multipole) or el.isthick:
         return False
+    knl, ksl = el.get_total_knl_ksl()
     return (el.radiation_flag == 0
-            and (el.order == 0 or len(el.knl) == 1 or not any(el.knl[1:]))
-            and not any(el.ksl)
+            and (len(knl) <= 1 or not any(knl[1:]))
+            and not any(ksl)
+            and not _has_transverse_rotation(el)
             and el.shift_x == 0 and el.shift_y == 0 and el.shift_s == 0
             and np.abs(el.rot_s_rad) < 1e-12)
+
+def _has_transverse_rotation(el):
+    return el.rot_x_rad != 0 or el.rot_y_rad != 0
+
+def _trim_common_trailing_zeros(knl, ksl):
+    last_nonzero = 0
+    for ii, vv in enumerate(knl):
+        if vv != 0:
+            last_nonzero = ii
+    for ii, vv in enumerate(ksl):
+        if vv != 0:
+            last_nonzero = max(last_nonzero, ii)
+    return knl[:last_nonzero + 1], ksl[:last_nonzero + 1]
 
 @contextmanager
 def freeze_longitudinal(tracker):
