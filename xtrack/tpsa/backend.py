@@ -1,4 +1,4 @@
-"""GtpsaBackend: routes ``ParticlesTpsa`` maps through libgtpsa.so.
+"""GtpsaBackend: routes ``ParticlesTpsa`` maps through the compiled bridge modules.
 
 Registered for ``ParticlesTpsa`` via ``register_tracking_backend`` at package import.
 ``BeamElement.track`` / ``Line.track`` dispatch here for non-native particle objects.
@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import cffi
 import numpy as np
 
-from . import _gtpsa
+import xgtpsa
+
+from ._bridge_build import bridge_entry
 from .particles import ParticlesTpsa
 
 if TYPE_CHECKING:
@@ -34,10 +36,10 @@ def _xobject_ptr(xobj: xo.Struct | Any, ffi: cffi.FFI | None = None) -> Any:
     Works for both a compound element (``element._xobject``) and the bridge particle
     struct (which is an ``xo.Struct``).
     ``ffi`` must be the cffi that owns the callable the pointer is passed to (the one
-    returned by ``_gtpsa.bridge_entry``). Defaults to the shared dlopen ffi used
+    returned by ``bridge_entry``). Defaults to the shared dlopen ffi used
     for the "mad_*" functions.
     """
-    ffi = ffi or _gtpsa.ffi()
+    ffi = ffi or xgtpsa.ffi()
     buf = np.frombuffer(xobj._buffer.buffer, dtype="int8")
     return ffi.cast("void*", buf.ctypes.data + xobj._offset)
 
@@ -67,7 +69,7 @@ def type_id_for(cls_name: str, context: str = "") -> int:
         return TYPE_IDS[cls_name]
     except KeyError:
         raise NotImplementedError(
-            f"{context}{cls_name} has no libgtpsa.so TPSA wrapper yet "
+            f"{context}{cls_name} is not in the TPSA bridge registry yet "
             f"(supported: {', '.join(TYPE_IDS)})"
         ) from None
 
@@ -84,7 +86,7 @@ def num_bridge(
     Keep the buffers alive across the call.
     """
     from ._bridge_particle import XtBridgeParticle, _COORDS, _REF_VARS
-    ffi = _gtpsa.ffi()
+    ffi = xgtpsa.ffi()
     bp = XtBridgeParticle()
     for c, b in zip(_COORDS, coord_ptrs):
         setattr(bp, c, int(ffi.cast("uintptr_t", b)))
@@ -130,7 +132,7 @@ class GtpsaBackend:
         """Track ``particles`` (a ``ParticlesTpsa`` map) through one ``element`` in place."""
         type_id = type_id_for(type(element).__name__)
         p = _fill_struct(particles)
-        fn, ffi = _gtpsa.bridge_entry("tpsa", "xt_bridge_track_element_tpsa")
+        fn, ffi = bridge_entry("tpsa", "xt_bridge_track_element_tpsa")
         fn(type_id, _element_ptr(element, ffi), _xobject_ptr(p, ffi))
         return particles
 
@@ -167,7 +169,7 @@ class GtpsaBackend:
         ele_start, num = self._resolve_range(
             line, ele_start, ele_stop, num_elements, num_turns
         )
-        fn, ffi = _gtpsa.bridge_entry("tpsa", "xt_bridge_track_line_tpsa")
+        fn, ffi = bridge_entry("tpsa", "xt_bridge_track_line_tpsa")
         if multi_element_monitor_at is not None:
             mon, flag, observe = self._resolve_observe(
                 line, particles, multi_element_monitor_at, ele_start, num, ffi
@@ -243,14 +245,14 @@ class GtpsaBackend:
         # Push the knob table (field addr -> parametric TPSA). Cast everything to the
         # bridge ffi via raw integer addresses (cross-ffi cdata is not interchangeable).
         addrs, ptrs = knobs.table()
-        shared = _gtpsa.ffi()
+        shared = xgtpsa.ffi()
         addr_arr = ffi.new("void*[]", [ffi.cast("void*", int(a)) for a in addrs])
         tpsa_arr = ffi.new(
             "void*[]",
             [ffi.cast("void*", int(shared.cast("uintptr_t", p))) for p in ptrs],
         )
         proto = ffi.cast("void*", int(shared.cast("uintptr_t", particles.coords[0]._p)))
-        set_fn, _ = _gtpsa.bridge_entry("tpsa", "xt_knob_set_table")
+        set_fn, _ = bridge_entry("tpsa", "xt_knob_set_table")
         set_fn(addr_arr, tpsa_arr, proto, len(addrs))
 
         kd_ptr = ffi.cast("int64_t*", kd.ctypes.data)
@@ -400,7 +402,7 @@ class GtpsaBackend:
         UnionRef order and mis-dispatches (SIGSEGV). Cached per line as a plain address,
         cast with the caller's ``ffi`` on each call (defaults to the shared ``mad_*`` ffi).
         """
-        ffi = ffi or _gtpsa.ffi()
+        ffi = ffi or xgtpsa.ffi()
         from xtrack.tracker import _element_ref_data_class_from_element_classes
 
         names = tuple(line.element_names)
