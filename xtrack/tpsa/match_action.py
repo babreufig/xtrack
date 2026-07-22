@@ -10,9 +10,13 @@ from typing import Any
 
 import numpy as np
 
+import xgtpsa
 import xtrack as xt
 
 from ..match import Action, TargetRelPhaseAdvance
+from ..twiss import _6d_w_matrix
+from .knobs import Knobs
+from .particles import ParticlesTpsa
 
 # Optics quantities served by TpsaOptics; orbit quantities by the map's param_jacobian.
 _OPTICS_QTYS = ("betx", "bety", "alfx", "alfy", "mux", "muy", "dx", "dpx", "dy", "dpy")
@@ -126,9 +130,13 @@ class ActionTpsaTrack(Action):
             for loc in self.optics_target_locations
         }
 
-        from .knobs import Knobs
-
-        self._knobs = Knobs(self.line, self.vary_names, order=1)
+        # The parametric descriptor is owned here, and both Knobs and every seeded
+        # parametric map borrow it. The bare (knob-free) map keeps its own order-1
+        # descriptor, as that is a genuinely different space.
+        self._parametric_descriptor = xgtpsa.Descriptor.new(
+            6, self.order, num_parameters=len(self.vary_names), param_order=1)
+        self._knobs = Knobs(self.line, self.vary_names, order=1,
+                            descriptor=self._parametric_descriptor)
         self._already_prepared = True
 
     # ------------------------------------------------------------------- seed
@@ -139,9 +147,6 @@ class ActionTpsaTrack(Action):
         cheap knob-free order-1 map (values only -- the optics come from the Jacobian,
         which the knob parameters do not affect).
         """
-        from .particles import ParticlesTpsa
-        from ..twiss import _6d_w_matrix
-
         init = self._init
         pref = self.line.particle_ref
 
