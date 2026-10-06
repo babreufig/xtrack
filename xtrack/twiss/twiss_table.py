@@ -30,7 +30,7 @@ import xtrack as xt  # To avoid circular imports
 CYCLICAL_QUANTITIES = ['mux', 'muy', 'dzeta', 's']
 
 DEFAULT_COL_ORDER = [
-    'name', 'element_type', 's', 'betx', 'bety', 'alfx', 'alfy', 'dx', 'dy'
+    'name', 'element_type', 's', 'betx', 'bety', 'alfx', 'alfy', 'dx', 'dy',
     'dpx', 'dpy', 'x', 'y', 'px', 'py', 'delta', 'zeta']
 
 
@@ -168,7 +168,7 @@ class TwissTable(Table):
                 self.W_matrix[ii] for ii in range(len(self.W_matrix))]
 
         import pandas as pd
-        df = pd.DataFrame(data, columns=self._col_names)
+        df = pd.DataFrame(data, columns=columns)
         if index is not None:
             df.set_index(index, inplace=True)
         return df
@@ -528,26 +528,25 @@ class TwissTable(Table):
             Which formalism to use for the computation. Can be ``Nagaitsev``
             or ``Bjorken-Mtingwa`` (also accepts ``B&M``), case-insensitively.
         total_beam_intensity : int, optional
-            The beam intensity. Required if ``particles`` is not provided.
+            The beam intensity. Must be provided.
         gemitt_x : float, optional
-            Horizontal geometric emittance in [m]. If ``particles`` is not
-            provided, either this parameter or ``nemitt_x`` is required.
+            Horizontal geometric emittance in [m]. Either this parameter or
+            ``nemitt_x`` is required.
         nemitt_x : float, optional
-            Horizontal normalized emittance in [m]. If ``particles`` is not
-            provided, either this parameter or ``gemitt_x`` is required.
+            Horizontal normalized emittance in [m]. Either this parameter or
+            ``gemitt_x`` is required.
         gemitt_y : float, optional
-            Vertical geometric emittance in [m]. If ``particles`` is not
-            provided, either this parameter or ``nemitt_y`` is required.
+            Vertical geometric emittance in [m]. Either this parameter or
+            ``nemitt_y`` is required.
         nemitt_y : float, optional
-            Vertical normalized emittance in [m]. If ``particles`` is not
-            provided, either this parameter or ``gemitt_y`` is required.
+            Vertical normalized emittance in [m]. Either this parameter or
+            ``gemitt_y`` is required.
         sigma_delta : float, optional
-            The momentum spread. Required if ``particles`` is not provided.
+            The momentum spread. Must be provided.
         bunch_length : float, optional
-            The bunch length in [m]. Required if ``particles`` is not provided.
+            The bunch length in [m]. Must be provided.
         bunched : bool, optional
             Whether the beam is bunched or not (coasting). Defaults to ``True``.
-            Required if ``particles`` is not provided.
         **kwargs : dict
             Keyword arguments are passed to the growth rates computation method of
             the chosen IBS formalism implementation. See the IBS details from the
@@ -619,8 +618,8 @@ class TwissTable(Table):
         -------
             If the user does not provide a starting emittance, the program
             defaults to using the SR equilibrium value from this ``TwissTable``,
-            which is a reasonable defaults for light sources. If a constraint
-            is provided via ``emittance_constraint``  the starting emittances are
+            which is a reasonable default for light sources. If a constraint
+            is provided via ``emittance_constraint``, the starting emittances are
             re-computed to respect that constraint (this is logged to the user).
 
             If the user does provide starting emittances **and** a constraint, it
@@ -735,9 +734,9 @@ class TwissTable(Table):
                 - eq_sr_ibs_gemitt_x: final horizontal equilibrium geometric emittance converged to, in [m].
                 - eq_sr_ibs_nemitt_x: final horizontal equilibrium normalized emittance converged to, in [m].
                 - eq_sr_ibs_gemitt_y: final vertical equilibrium geometric emittance converged to, in [m].
-                - eq_sr_ibs_gemitt_y: final vertical equilibrium normalized emittance converged to, in [m].
+                - eq_sr_ibs_nemitt_y: final vertical equilibrium normalized emittance converged to, in [m].
                 - eq_sr_ibs_gemitt_zeta: final longitudinal equilibrium geometric emittance converged to, in [m].
-                - eq_sr_ibs_gemitt_zeta: final longitudinal equilibrium normalized emittance converged to, in [m].
+                - eq_sr_ibs_nemitt_zeta: final longitudinal equilibrium normalized emittance converged to, in [m].
         """
         try:
             from xfields.ibs import get_ibs_and_synrad_emittance_evolution
@@ -786,7 +785,7 @@ class TwissTable(Table):
             end = np.where(self.name == end)[0][0]
 
         if start > end:
-            raise ValueError('start must be smaller than ele_end')
+            raise ValueError('start must be smaller than end')
 
         W_start = self.W_matrix[start]
         W_end = self.W_matrix[end]
@@ -927,11 +926,11 @@ class TwissTable(Table):
                                     y = ctx2np(particles.y)[mask_at_ele],
                                     py = ctx2np(particles.py)[mask_at_ele],
                                     zeta = ctx2np(particles.zeta)[mask_at_ele],
-                                    pzeta = ctx2np(particles.ptau)[mask_at_ele]/ctx2np(particles.beta0)[mask_at_ele],
+                                    pzeta = ctx2np(particles.pzeta)[mask_at_ele],
                                     W_matrix = W,
                                     co_dict = {'x': self.x[at_ele], 'px': self.px[at_ele],
                                                'y': self.y[at_ele], 'py': self.py[at_ele],
-                                               'zeta': self.zeta[at_ele], 'ptau': self.ptau[at_ele],
+                                               'zeta': self.zeta[at_ele], 'pzeta': self.pzeta[at_ele],
                                                'beta0': self.particle_on_co._xobject.beta0[0],
                                                'gamma0': self.particle_on_co._xobject.gamma0[0]},
                                     nemitt_x = nemitt_x,
@@ -983,7 +982,7 @@ class TwissTable(Table):
         if self.only_markers:
             itake = slice(None, -1, None)
         else:
-            # To keep association name <-> quantities at elemement entry
+            # To keep association name <-> quantities at element entry
             itake = slice(1, None, None)
 
         for kk in self._col_names:
@@ -1020,6 +1019,8 @@ class TwissTable(Table):
         out.zeta = -out.zeta
         out.delta = out.delta
         out.ptau = out.ptau
+        if 'pzeta' in out:
+            out.pzeta = out.pzeta
 
         if 'kin_px' in out:
             out.kin_px = out.kin_px
@@ -1298,8 +1299,8 @@ class TwissTable(Table):
         """
         Plot columns of the TwissTable
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         yl: str
             space separated columns or expressions to plot on the left y-axis
         yr: str
@@ -1318,6 +1319,16 @@ class TwissTable(Table):
             axis to plot on
         figlabel: str
             label to use for the figure
+        figure: matplotlib figure
+            figure to plot on (if not provided, a new figure is created)
+        hover: bool
+            if True, element information is printed when hovering on the plot
+        grid: bool
+            if True, the grid is shown
+        figsize: tuple
+            size of the figure (used when a new figure is created)
+        lattice_only: bool
+            if True, only the lattice is plotted
         """
 
         if yl is None and yr is None:

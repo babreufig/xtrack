@@ -3,20 +3,19 @@
 # Copyright (c) CERN, 2025.                 #
 # ######################################### #
 
+from numbers import Number
 from warnings import warn
 
 import numpy as np
-
-from numbers import Number
-
+import xobjects as xo
 from scipy.special import factorial
 
-import xobjects as xo
-
 from ..base_element import FloatOrTpsa
+from ..general import DEPRECATION_INFO_PREP_1_0
 from ..internal_record import RecordIndex
 
 DEFAULT_MULTIPOLE_ORDER = 5
+DEFAULT_RELATIVE_MULTIPOLE_LENGTH = 1
 
 _INDEX_TO_MODEL_DRIFT = {
     0: 'adaptive',
@@ -43,8 +42,11 @@ _MODEL_TO_INDEX_CURVED = {k: v for v, k in _INDEX_TO_MODEL_CURVED.items()} | {'e
 _INDEX_TO_INTEGRATOR = {
     0: 'adaptive',
     1: 'teapot',
-    2: 'yoshida4',
+    # We used to have yoshida4 here, but it was actually yoshida6; keeping the behaviour linked to the same index.
+    2: 'yoshida-6',
     3: 'uniform',
+    4: 'yoshida-4',
+    5: 'yoshida-8',
 }
 
 _INTEGRATOR_TO_INDEX = {k: v for v, k in _INDEX_TO_INTEGRATOR.items()}
@@ -85,16 +87,16 @@ _INDEX_TO_RBEND_MODEL = {
 _RBEND_MODEL_TO_INDEX = {k: v for v, k in _INDEX_TO_RBEND_MODEL.items()}
 
 _for_docstring_edge_straight = ('''
-    edge_entry_active: bool
+    edge_entry_active : bool
         Fringe field at the entrance edge is active if True. Default is False.
-    edge_exit_active: bool
+    edge_exit_active : bool
         Fringe field at the exit edge is active if True. Default is False.
     ''').strip()
 
 _for_docstring_edge_bend = ('''
-    edge_entry_active: bool
+    edge_entry_active : bool
         Edge effects at the entrance edge are active if True. Default is True.
-    edge_exit_active: bool
+    edge_exit_active : bool
         Edge effects at the exit edge are active if True. Default is True.
     edge_entry_model : str
         Model used for the entrance edge. Available models are: "suppressed",
@@ -113,11 +115,17 @@ _for_docstring_edge_bend = ('''
         Angle of the reference trajectory at the exit edge. Used only
         when `edge_exit_model` is "linear". Default is ``0``.
     edge_entry_fint : float
-        Fringe field integral at the entrance edge. Used only when
-        `edge_entry_model` is "full". Default is ``0``.
+        Fringe field integral at the entrance edge. Used with the "linear",
+        "full", and "dipole-only" edge models. Default is ``0``.
     edge_exit_fint : float
-        Fringe field integral at the exit edge. Used only when
-        `edge_exit_model` is "full". Default is ``0``.
+        Fringe field integral at the exit edge. Used with the "linear",
+        "full", and "dipole-only" edge models. Default is ``0``.
+    edge_entry_hgap : float
+        Magnet half-gap at the entrance edge in meters. Used together with
+        ``edge_entry_fint`` in the fringe field calculation. Default is ``0``.
+    edge_exit_hgap : float
+        Magnet half-gap at the exit edge in meters. Used together with
+        ``edge_exit_fint`` in the fringe field calculation. Default is ``0``.
     ''').strip()
 
 _for_docstring_alignment = '''
@@ -168,16 +176,19 @@ class _HasIntegrator:
     with integrator fields.
     """
 
-    _for_docstring = ('''
+    _for_docstring = (
+        """
     integrator : str
         Integrator used for the element. Available integrators are: "adaptive",
-        "teapot", "yoshida4", "uniform". Default is "adaptive".
+        "teapot", "yoshida-4", "yoshida-6", "yoshida-8",
+        "uniform". Default is "adaptive" (sixth-order Yoshida).
     num_multipole_kicks : int
         Number of multipole kicks to be used. For the yoshida integrator, this
         is rounded up to the nearest number compatible with the integrator scheme.
         Default is ``0``, for which the number of kicks is chosen automatically
         based on the element length and strength.
-    ''').strip()
+    """
+    ).strip()
 
     @property
     def integrator(self):
@@ -185,6 +196,15 @@ class _HasIntegrator:
 
     @integrator.setter
     def integrator(self, value):
+        if value == 'yoshida4':
+            warn(
+                "The 'yoshida4' integrator is now deprecated and will be removed in a future version. "
+                'In the past this was equivalent to the present yoshida-6. '
+                "To get the same behaviour, please use 'yoshida-6' instead."
+                + DEPRECATION_INFO_PREP_1_0,
+                FutureWarning,
+            )
+            value = 'yoshida-6'
         try:
             self._integrator = _INTEGRATOR_TO_INDEX[value]
         except KeyError:
@@ -201,7 +221,7 @@ class _HasIntegrator:
         List[str]
             List of available integrators.
         """
-        out = [kk for kk in _INTEGRATOR_TO_INDEX.keys()]
+        out = [kk for kk in _INTEGRATOR_TO_INDEX]
         return out
 
 class _HasModelDrift:
@@ -233,7 +253,7 @@ class _HasModelDrift:
         List[str]
             List of available models.
         """
-        out = [kk for kk in _MODEL_TO_INDEX_DRIFT.keys()]
+        out = [kk for kk in _MODEL_TO_INDEX_DRIFT]
         return out
 
 class _HasModelStraight:
@@ -246,7 +266,8 @@ class _HasModelStraight:
     _for_docstring = ('''
     model : str
         Model used for the element. Available models are: "adaptive", "mat-kick-mat",
-        "drift-kick-drift-exact", "drift-kick-drift-expanded". Default is "adaptive".
+        "drift-kick-drift-exact", "drift-kick-drift-expanded", "rot-kick-rot-low-order",
+        "rot-kick-rot-high-order". Default is "adaptive".
     ''').strip()
 
     @property
@@ -271,7 +292,7 @@ class _HasModelStraight:
         List[str]
             List of available models.
         """
-        out = [kk for kk in _MODEL_TO_INDEX_STRAIGHT.keys() if kk != 'full']
+        out = [kk for kk in _MODEL_TO_INDEX_STRAIGHT if kk != 'full']
         return out
 
 class _HasModelCurved:
@@ -285,7 +306,8 @@ class _HasModelCurved:
     model : str
         Model used for the element. Available models are: "adaptive",
         "bend-kick-bend", "rot-kick-rot", "mat-kick-mat",
-        "drift-kick-drift-exact", "drift-kick-drift-expanded".
+        "drift-kick-drift-exact", "drift-kick-drift-expanded",
+        "rot-kick-rot-low-order", "rot-kick-rot-high-order".
         Default is "adaptive".
     ''').strip()
 
@@ -311,7 +333,7 @@ class _HasModelCurved:
         List[str]
             List of available models.
         """
-        out = [kk for kk in _MODEL_TO_INDEX_CURVED.keys()
+        out = [kk for kk in _MODEL_TO_INDEX_CURVED
                if kk not in ('full', 'expanded')]
         return out
 
@@ -321,6 +343,14 @@ class _HasModelRF:
     Mixin class adding properties and methods for beam elements
     with RF model fields.
     """
+
+    _for_docstring = ('''
+    model : str
+        Model used for the element. Available models are: "adaptive",
+        "drift-kick-drift-exact", "drift-kick-drift-expanded",
+        "rot-kick-rot-low-order", "rot-kick-rot-high-order".
+        Default is "adaptive".
+    ''').strip()
 
     @property
     def model(self):
@@ -339,7 +369,7 @@ class _HasModelRF:
     def get_available_models():
         """Get list of available RF models for this element.
         """
-        out = [kk for kk in _MODEL_TO_INDEX_RF.keys() if kk != 'full']
+        out = [kk for kk in _MODEL_TO_INDEX_RF if kk != 'full']
         return out
 
 class _HasKnlKsl:
@@ -406,11 +436,18 @@ class _HasKnlKsl:
     def to_dict(self, copy_to_cpu=True):
         out = super().to_dict(copy_to_cpu=copy_to_cpu)
 
-        if 'knl' in out and np.allclose(out['knl'], 0, atol=1e-16):
-            out.pop('knl', None)
+        for name in ('knl', 'ksl'):
+            if name in out and np.allclose(out[name], 0, atol=1e-16):
+                out.pop(name)
 
-        if 'ksl' in out and np.allclose(out['ksl'], 0, atol=1e-16):
-            out.pop('ksl', None)
+        # Unlike knl/ksl, whose allocation is restored from order, the relative
+        # arrays have an independent length. Only omit them at the default length
+        # to preserve allocation and indexed expressions on a round trip.
+        for name in ('knl_rel', 'ksl_rel'):
+            if (name in out
+                    and len(out[name]) == DEFAULT_RELATIVE_MULTIPOLE_LENGTH
+                    and np.allclose(out[name], 0, atol=1e-16)):
+                out.pop(name)
 
         if self.order != 0 and 'knl' not in out and 'ksl' not in out:
             out['order'] = self.order
@@ -499,7 +536,7 @@ class _HasKnlKsl:
         order_name : str, optional
             The name of the field in ``kwargs`` that stores the order.
         skip_factorial : bool, optional
-            Whether to calculate ``inv_factorial_order``. Skipped by default.
+            Whether to skip the calculation of ``inv_factorial_order``. Not skipped by default.
         kwargs : dict
             A dictionary with values that are either array-type fields that contain
             multipolar coefficients, or None.
@@ -547,8 +584,8 @@ _ROT_AX_TO_ID = {'x': 0, 'y': 1, 's': 2}
 _ROT_ID_TO_AX = {0: 'x', 1: 'y', 2: 's'}
 
 def _handle_knl_ksl_rel_kwargs(kwargs):
-    knl_rel = kwargs.pop('knl_rel', [0])
-    ksl_rel = kwargs.pop('ksl_rel', [0])
+    knl_rel = kwargs.pop('knl_rel', [0] * DEFAULT_RELATIVE_MULTIPOLE_LENGTH)
+    ksl_rel = kwargs.pop('ksl_rel', [0] * DEFAULT_RELATIVE_MULTIPOLE_LENGTH)
     # pad to have the same length for knl_rel and ksl_rel
     max_len_rel = max(len(knl_rel), len(ksl_rel))
     if len(knl_rel) != len(ksl_rel):

@@ -16,8 +16,8 @@ from xtrack.aperture.transform import (
 DTypeFloat = np.dtype[FloatType._dtype]
 NDArrayNx2 = np.ndarray[tuple[int, Literal[2]], DTypeFloat]
 NDArrayNxMx2 = np.ndarray[tuple[int, int, Literal[2]], DTypeFloat]
-HomogenousMatrix = np.ndarray[tuple[Literal[4], Literal[4]], DTypeFloat]
-HomogenousMatrices = np.ndarray[tuple[int, Literal[4], Literal[4]], DTypeFloat]
+HomogeneousMatrix = np.ndarray[tuple[Literal[4], Literal[4]], DTypeFloat]
+HomogeneousMatrices = np.ndarray[tuple[int, Literal[4], Literal[4]], DTypeFloat]
 
 
 def _hashed_color(name: str, palette: list[str]) -> str:
@@ -393,7 +393,7 @@ class ProfilePositionView:
 
     def get_transform(self, frame: Frame = 'curved'):
         if frame not in ('curved', 'straight'):
-            return ValueError('Frame must be "curved" or "straight"')
+            raise ValueError('Frame must be "curved" or "straight"')
 
         t_x, t_y, t_s = self.shift_x, self.shift_y, self.shift_s
         rot_y, rot_x, rot_s = self.rot_y_rad, self.rot_x_rad, self.rot_s_rad

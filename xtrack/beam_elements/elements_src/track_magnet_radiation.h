@@ -21,7 +21,7 @@ void direction_of_motion(
 
     xt_float_or_tpsa const iix = px / (1. + delta);
     xt_float_or_tpsa const iiy = py / (1. + delta);
-    xt_float_or_tpsa const iis = sqrt(1 - iix * iix + iiy * iiy);
+    xt_float_or_tpsa const iis = sqrt(1 - iix * iix - iiy * iiy);
 
     *iv_x = iix;
     *iv_y = iiy;

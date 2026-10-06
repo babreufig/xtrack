@@ -11,7 +11,6 @@ import xtrack as xt
 from ._common import (
     _HasIntegrator,
     _HasModelRF,
-    _HasModelStraight,
     _NOEXPR_FIELDS,
     _docstring_general_notes,
     _for_docstring_alignment,
@@ -50,7 +49,7 @@ class Cavity(_HasModelRF, _HasIntegrator, BeamElement):
     '''.strip()
 
     __doc__ = '\n    '.join([_docstring_start,
-        _HasModelStraight._for_docstring,
+        _HasModelRF._for_docstring,
         _HasIntegrator._for_docstring.replace(
             'num_multipole_kicks', 'num_kicks').replace('multipole kicks', 'kicks'),
         _for_docstring_alignment, '\n',
@@ -155,7 +154,7 @@ class Cavity(_HasModelRF, _HasIntegrator, BeamElement):
                  "while loading a saved line from a previous version of Xsuite, please "
                  "regenerate the line with the current version to use phase instead of lag. "
                  "Note that if both `lag` and `phase` are set, the effect is the sum of the two, "
-                 " with `lag` converted to radians. "
+                 "with `lag` converted to radians. "
                  + DEPRECATION_INFO_PREP_1_0,
                  FutureWarning, stacklevel=2)
         self._lag = value

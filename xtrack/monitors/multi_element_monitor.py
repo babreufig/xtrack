@@ -7,7 +7,7 @@ import numpy as np
 
 import xtrack as xt
 import xobjects as xo
-from xtrack.tpsa.particles import COORDS, ParticlesTpsa
+from xtrack.tpsa.particles import COORDS, _LOCAL_COORDS, _SPIN_COORDS, ParticlesTpsa
 
 # A monomial is the per-variable orders, a tuple once parsed. A request is
 # several of them, or the ones wanted per output coordinate.
@@ -89,9 +89,14 @@ class MultiElementMonitor(xt.BeamElement):
         '#include "xtrack/monitors/multi_element_monitor.h"',
     ]
 
-    _coord_name_to_index = {'x': 0, 'px': 1, 'y': 2, 'py': 3,
-                            'zeta': 4, 'delta': 5, 's': 6, 'ax': 7, 'ay': 8,
-                            'spin_x': 9, 'spin_y': 10, 'spin_z': 11}
+    _data_coord_name_to_index = {'x': 0, 'px': 1, 'y': 2, 'py': 3,
+                                 'zeta': 4, 'delta': 5, 's': 6}
+    _data_coord_name_to_index |= {
+        name: ii for ii, name in enumerate(_LOCAL_COORDS + _SPIN_COORDS)
+    }
+    _tpsa_coord_name_to_index = {
+        name: ii for ii, name in enumerate(COORDS + _LOCAL_COORDS + _SPIN_COORDS)
+    }
 
     def __init__(self, start_at_turn, stop_at_turn,
                  part_id_start, part_id_end,
@@ -138,7 +143,7 @@ class MultiElementMonitor(xt.BeamElement):
         self._slot_index = {}
         for slot, (coord, monomial, coefficient_index) in enumerate(recordings):
             self.monomial_indices[slot] = coefficient_index
-            self.coord_indices[slot] = self._coord_name_to_index[coord]
+            self.coord_indices[slot] = self._tpsa_coord_name_to_index[coord]
             self._slot_index[coord, monomial] = slot
 
     def __len__(self):
@@ -242,7 +247,7 @@ class MultiElementMonitor(xt.BeamElement):
         return series, addresses
 
     def get(self, coordinate, obs_name=None, particle_id=None, turn=None):
-        coord_index = self._coord_name_to_index[coordinate]
+        coord_index = self._data_coord_name_to_index[coordinate]
 
         if obs_name is None:
             obs_index = slice(None)

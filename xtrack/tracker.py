@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class Tracker:
 
     '''
-    Xsuite tracker class. It is the core of the xsuite package, allows tracking
+    Xsuite tracker class. It is the core of the xsuite package and allows tracking
     particles in a given beam line. Methods to match particle distributions
     and to compute twiss parameters are also available.
     '''
@@ -650,7 +650,7 @@ class Tracker:
     def enable_pipeline_hold(self, value):
         if not self.iscollective:
             raise ValueError(
-                'enable_pipeline_hold is not supported non collective trackers')
+                'enable_pipeline_hold is not supported for non-collective trackers')
         else:
             self._enable_pipeline_hold = value
 
@@ -885,7 +885,7 @@ class Tracker:
 
             LocalParticle_set_state(&lpart, 1);
             LocalParticle_set_at_element(&lpart, ele_start);
-            LocalParticle_update_delta(&lpart, LocalParticle_get_delta(&lpart));
+            LocalParticle_update_pzeta(&lpart, LocalParticle_get_pzeta(&lpart));
             LocalParticle_set_s(&lpart, 0.0);
             LocalParticle_set_ax(&lpart, 0.0);
             LocalParticle_set_ay(&lpart, 0.0);
@@ -1413,7 +1413,7 @@ class Tracker:
                 _session_to_resume = _session_to_resume.data
 
             assert not(_session_to_resume['resumed']), (
-                "This session hase been already resumed")
+                "This session has already been resumed")
 
             assert _session_to_resume['tracker'] is self, (
                 "This session was not created by this tracker")
@@ -1660,7 +1660,7 @@ class Tracker:
             # and one for the last turn
             monitor_turns = num_middle_turns + 2
         else:
-            # One monitor record for the initial turn, and num_middle_turns record for the middle turns
+            # One monitor record for the initial turn, and num_middle_turns records for the middle turns
             monitor_turns = num_middle_turns + 1
 
         (flag_monitor, monitor, buffer_monitor, offset_monitor
@@ -1809,17 +1809,17 @@ class Tracker:
                 'Multi-element monitor is only supported on CPU trackers for now.')
         assert isinstance(multi_element_monitor_at, (list, tuple, np.ndarray)), \
             '`multi_element_monitor_at` must be a list, tuple or array of element names'
-        indeces_obs = tt.rows.indices[multi_element_monitor_at]
-        if len(indeces_obs) != len(multi_element_monitor_at):
+        indices_obs = tt.rows.indices[multi_element_monitor_at]
+        if len(indices_obs) != len(multi_element_monitor_at):
             missing = set(multi_element_monitor_at) - set(
-                tt.rows.names[indeces_obs])
+                tt.rows.names[indices_obs])
             raise ValueError(f'Elements not found in line: {missing}')
 
         at_element_mapping = np.zeros(len(tt), dtype=np.int64)
         at_element_mapping[:] = -1
-        at_element_mapping[indeces_obs] = np.arange(len(indeces_obs), dtype=np.int64)
+        at_element_mapping[indices_obs] = np.arange(len(indices_obs), dtype=np.int64)
 
-        return at_element_mapping, tt.name[indeces_obs] # to ensure the right order
+        return at_element_mapping, tt.name[indices_obs] # to ensure the right order
 
     def _get_multi_element_monitor(self, multi_element_monitor_at, particles,
                                    num_turns, tpsa_descriptor=None,
@@ -1847,7 +1847,7 @@ class Tracker:
         else:
             part_id_start, part_id_end = 0, 1  # a map is a single particle
         num_particles = part_id_end - part_id_start
-        num_cooordinates = len(xt.MultiElementMonitor._coord_name_to_index)
+        num_coordinates = len(xt.MultiElementMonitor._data_coord_name_to_index)
         num_elements = len(obs_names)
         num_turns = num_turns if num_turns is not None else 1
 
@@ -1863,7 +1863,7 @@ class Tracker:
             part_id_start=part_id_start,
             part_id_end=part_id_end,
             at_element_mapping=at_element_mapping,
-            data=(num_turns, num_particles, num_cooordinates, num_elements),
+            data=(num_turns, num_particles, num_coordinates, num_elements),
             tpsa_addresses=tpsa_addresses,
             monomials=monitor_monomials,
             descriptor=tpsa_descriptor,
