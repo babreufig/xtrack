@@ -252,47 +252,45 @@ def magnet_kick_jax(
 # Functional integrators.
 # Each takes drift_fn(state, dlength) and kick_fn(state, klength) and composes
 # them over ``length`` with ``num_kicks`` kicks.  num_kicks is a *static* Python
-# int (resolved per element at encode time) so the composition unrolls cleanly.
+# int (resolved per element at encode time), repeated slices run as a fori_loop.
 # ---------------------------------------------------------------------------
 def integrate_yoshida4(state, drift_fn, kick_fn, length, num_kicks):
     """4th-order Yoshida (7-kick, MAD-NG coefficients)."""
     n_slices = math.ceil(num_kicks / _N_KICKS_YOSHIDA)  # ceil (round-up division)
     sl = length / n_slices
     kw = 1.0 / n_slices
-    seq = [
-        ("d", 0),
-        ("k", 0),
-        ("d", 1),
-        ("k", 1),
-        ("d", 2),
-        ("k", 2),
-        ("d", 3),
-        ("k", 3),
-        ("d", 3),
-        ("k", 2),
-        ("d", 2),
-        ("k", 1),
-        ("d", 1),
-        ("k", 0),
-        ("d", 0),
-    ]
-    for _ in range(n_slices):
-        for kind, i in seq:
-            if kind == "d":
-                state = drift_fn(state, _D_YOSHIDA[i] * sl)
-            else:
-                state = kick_fn(state, _K_YOSHIDA[i] * kw * length)
-    return state
+    # d0 k0 d1 k1 d2 k2 d3 k3 d3 k2 d2 k1 d1 k0 d0 as 7 (drift, kick) pairs and a last drift.
+    drift_coefficients = jnp.array([_D_YOSHIDA[i] for i in (0, 1, 2, 3, 3, 2, 1)])
+    kick_coefficients = jnp.array([_K_YOSHIDA[i] for i in (0, 1, 2, 3, 2, 1, 0)])
+
+    def drift_and_kick(j, state):
+        state = drift_fn(state, drift_coefficients[j] * sl)
+        return kick_fn(state, kick_coefficients[j] * kw * length)
+
+    def one_slice(_, state):
+        state = lax.fori_loop(0, 7, drift_and_kick, state)
+        return drift_fn(state, _D_YOSHIDA[0] * sl)
+
+    return _repeat(n_slices, one_slice, state)
+
+
+def _repeat(count, body, state):
+    """Apply body count times, as a loop in the traced program so its size does not grow with count."""
+    if count == 1:
+        return body(0, state)
+    return lax.fori_loop(0, count, body, state)
 
 
 def integrate_yoshida2(state, drift_fn, kick_fn, length, num_kicks):
     """2nd-order leapfrog (drift L/2, kick L, drift L/2) per kick."""
     sl = length / num_kicks
-    for _ in range(num_kicks):
+
+    def one_kick(_, state):
         state = drift_fn(state, 0.5 * sl)
         state = kick_fn(state, sl)
-        state = drift_fn(state, 0.5 * sl)
-    return state
+        return drift_fn(state, 0.5 * sl)
+
+    return _repeat(num_kicks, one_kick, state)
 
 
 def integrate_uniform(state, drift_fn, kick_fn, length, num_kicks):
@@ -310,9 +308,13 @@ def integrate_teapot(state, drift_fn, kick_fn, length, num_kicks):
         edge = 0.5
         inside = 0.0
     state = drift_fn(state, edge * length)
-    for _ in range(num_kicks - 1):
+
+    def kick_and_drift(_, state):
         state = kick_fn(state, kw * length)
-        state = drift_fn(state, inside * length)
+        return drift_fn(state, inside * length)
+
+    if num_kicks > 1:
+        state = _repeat(num_kicks - 1, kick_and_drift, state)
     state = kick_fn(state, kw * length)
     state = drift_fn(state, edge * length)
     return state
@@ -672,9 +674,9 @@ def thin_multipole_kick_jax(state, knl, ksl):
     return jnp.array([x, px - dpx, y, py + dpy, zeta, delta])
 
 
-# Dispatch codes: fixed leaves (identity / merged-drift / thin multipole), then
-# one code per unique magnet signature present, starting at DISP_MAGNET0.
-DISP_IDENT, DISP_DRIFT, DISP_THIN, DISP_MAGNET0 = 0, 1, 2, 3
+# Dispatch codes: fixed leaves (identity / merged-drift / thin multipole / exact
+# drift), then one code per unique magnet signature present, starting at DISP_MAGNET0.
+DISP_IDENT, DISP_DRIFT, DISP_THIN, DISP_EXACT_DRIFT, DISP_MAGNET0 = 0, 1, 2, 3, 4
 
 _MAGNET_CLASSES = ("Bend", "RBend", "Quadrupole", "Sextupole", "Octupole", "Multipole")
 
@@ -783,6 +785,11 @@ def encode_section(line, ordered_names, kq_index):
             # Link this row to the live kq vector so jacfwd reaches its k1.
             if nm in kq_index:
                 kqi = kq_index[nm]
+        # Xsuite tracks a field-free solenoid with the exact drift.
+        elif cls == "UniformSolenoid":
+            if float(e.ks) != 0.0:
+                raise NotImplementedError(f"solenoid {nm!r} with ks != 0 is not ported")
+            disp, L = DISP_EXACT_DRIFT, length
         # Inactive thick element (off magnet, etc.): collapse to a pure drift.
         elif bool(getattr(e, "isthick", False)) and length > 0.0:
             disp, L = DISP_DRIFT, length
@@ -925,8 +932,9 @@ def _branch_list(sigs, beta0):
 
     return [
         lambda s, e, kq: s,  # DISP_IDENT
-        lambda s, e, kq: drift_exact_jax(s, e.L, beta0),  # DISP_DRIFT
+        lambda s, e, kq: drift_expanded_jax(s, e.L, beta0),  # DISP_DRIFT, as xt.Drift
         lambda s, e, kq: thin_multipole_kick_jax(s, e.knl, e.ksl),  # DISP_THIN
+        lambda s, e, kq: drift_exact_jax(s, e.L, beta0),  # DISP_EXACT_DRIFT
     ] + [_make_magnet(sig) for sig in sigs]
 
 

@@ -41,12 +41,10 @@ ET_DRIFT, ET_QUAD, ET_BEND, ET_SEXT, ET_KICK, ET_CORR, ET_IDENT = range(7)
 # State layout is the xsuite 6-vector [x, px, y, py, zeta, delta].
 # ---------------------------------------------------------------------------
 def rvv_from_delta(delta, beta0):
-    """rvv = beta / beta0 as a function of delta (see particles.py)."""
-    one_plus_delta = 1.0 + delta
-    denom = jnp.sqrt(
-        beta0 * beta0 * one_plus_delta * one_plus_delta + 1.0 - beta0 * beta0
-    )
-    return one_plus_delta / denom
+    """rvv = beta / beta0 as a function of delta, in the operation order of Particles._update_energy_deviations."""
+    delta_beta0 = delta * beta0
+    ptau_beta0 = jnp.sqrt(delta_beta0**2 + 2 * delta_beta0 * beta0 + 1) - 1
+    return (1 + delta) / (1 + ptau_beta0)
 
 
 def _cs(K, length):
@@ -196,21 +194,29 @@ def curved_bend_map_jax(state, length, k0, h, beta0):
     s = length
     k0_chi = k0
 
-    A = 1.0 / jnp.sqrt(dp1**2 - py**2)
-    pz = jnp.sqrt(dp1**2 - px**2 - py**2)
+    # The rationalized form of the current C. The direct (new_pz*h - ... - k0)/(h*k0) loses 1/k0 to cancellation.
+    hs = h * s
+    sin_hs = jnp.sin(hs)
+    cos_hs = jnp.cos(hs)
+    sin_hs_2 = jnp.sin(hs / 2)
 
-    Cc = pz - k0_chi * (1.0 / h + x)
-    new_px = px * jnp.cos(s * h) + Cc * jnp.sin(s * h)
-    new_pz = jnp.sqrt(dp1**2 - new_px**2 - py**2)
-    d_new_px_ds = Cc * h * jnp.cos(h * s) - h * px * jnp.sin(h * s)
+    pz0 = jnp.sqrt(dp1**2 - px**2 - py**2)
+    Cc = pz0 - k0_chi * ((1.0 / h) + x)
+    pxs = px * cos_hs + Cc * sin_hs
+    pzs = jnp.sqrt(dp1**2 - pxs**2 - py**2)
 
-    new_x = (new_pz * h - d_new_px_ds - k0_chi) / (h * k0_chi)
-    D = jnp.arcsin(A * px) - jnp.arcsin(A * new_px)
-    new_y = y + (py * s) / (k0_chi / h) + (py / k0_chi) * D
-    delta_ell = (dp1 * s * h) / k0_chi + (dp1 / k0_chi) * D
+    delta_pz = (px - pxs) * (px + pxs) / (pz0 + pzs)
+    delta_D = -2 * Cc * sin_hs_2**2 - px * sin_hs
+    delta_x = (delta_pz - delta_D) / k0_chi
+    delta_px = -2 * px * sin_hs_2**2 + Cc * sin_hs
+
+    delta_a = jnp.arctan2(px * delta_pz - pz0 * delta_px, pz0 * pzs + px * pxs)
+    integ = (hs + delta_a) / k0_chi
+    new_y = y + py * integ
+    delta_ell = dp1 * integ
 
     return jnp.array(
-        [new_x, new_px, new_y, py, zeta + (length - delta_ell / rvv), delta]
+        [x + delta_x, pxs, new_y, py, zeta + (length - delta_ell / rvv), delta]
     )
 
 def thin_quad_skew_kick_jax(state, knl1, ksl1):
