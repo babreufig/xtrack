@@ -11,7 +11,7 @@ import xtrack as xt
 import xtrack.tpsa as xtpsa
 from madng_tpsa import Descriptor
 from xdeps.refs import AttrRef
-from xtrack.tpsa._knobs import KnobParameters
+from xtrack.tpsa import KnobParameters
 
 REPS = 50
 WARMUP = 3
@@ -166,7 +166,7 @@ def bench_line(line, mng, knob_names, knob_values, label, order):
 
     plain = Descriptor(var_names=xtpsa.COORDS, order=order)
     parametric = Descriptor(var_names=xtpsa.COORDS, order=order, param_names=knob_names, param_order=1)
-    knobs = KnobParameters(line, knob_names, parametric)
+    knobs = KnobParameters(line, parametric)
     n_driven = len(knob_driven_fields(line, knob_names))
 
     def refresh():

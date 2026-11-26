@@ -9,7 +9,7 @@ import xtrack.tpsa as xtpsa
 from xobjects.test_helpers import allow_kernel_compilation
 
 from xtrack._temp import lhc_match as lm
-from xtrack.tpsa._knobs import KnobParameters
+from xtrack.tpsa import KnobParameters
 from xtrack.tpsa.particles import COORDS
 from xtrack.twiss.twiss_init import _6d_w_matrix
 
@@ -1079,7 +1079,7 @@ def test_multi_element_monitor_records_parameters():
     line = _fodo_knob_line()
     names = ["kqf", "kqd", "ksx"]
     descriptor = Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1)
-    knobs = KnobParameters(line, names, descriptor)
+    knobs = KnobParameters(line, descriptor)
     knobs.apply()
 
     m = _offaxis_map(truncation_order=2, descriptor=descriptor)
@@ -1404,17 +1404,17 @@ def test_optics_dispersion_is_reported_wrt_delta_off_momentum():
 def test_knob_parameters_rejects_bad_names_and_shapes():
     line = _knob_line()
     with pytest.raises(KeyError, match="not a line variable"):
-        KnobParameters(line, ["nope"], Descriptor(var_names=COORDS, order=2, param_names=1))
-    with pytest.raises(ValueError, match="descriptor has 2 parameters, expected 1"):
-        KnobParameters(line, ["kqa"], Descriptor(
-            var_names=COORDS, order=2, param_names=["kqa", "kqb"], param_order=1))
+        KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=["nope"]))
+    # Unnamed parameters get the names p_1, p_2, ...
+    with pytest.raises(KeyError, match="'p_1' is not a line variable"):
+        KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=1))
 
 
 def test_knob_parameters_apply_and_driven_elements():
     line = _knob_line()
     names = ["kqa", "kqb", "klink"]
-    knobs = KnobParameters(line, names,
-                           Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1))
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=names,
+                                           param_order=1))
     assert len(knobs) == 3 and not knobs.applied
     knobs.teardown()          # a no-op before apply
     knobs.apply()
@@ -1434,8 +1434,8 @@ def test_knob_param_names_strength_jacobian_vs_fd():
     """d strength / d knob through the xdeps expressions, incl. a var->var chain."""
     line = _knob_line()
     names = ["kqa", "kqb", "klink"]
-    knobs = KnobParameters(line, names,
-                           Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1))
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=names,
+                                           param_order=1))
     knobs.apply()
     jacobian = knobs.strength_jacobian()
 
@@ -1468,7 +1468,7 @@ def test_knob_param_names_strength_jacobian_vs_fd():
 def test_knob_parameters_refresh_moves_a_nonlinear_knob():
     """refresh re-seeds the parameters, so the gradient follows the knob value."""
     line = _nonlinear_knob_line()
-    knobs = KnobParameters(line, ["kqa"], Descriptor(var_names=COORDS, order=2, param_names=["kqa"]))
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=["kqa"]))
     knobs.apply()
     xo.assert_allclose(knobs.strength_jacobian()[("mq1", "k1")], [2 * 0.012],
                        rtol=0, atol=1e-14)
@@ -1484,8 +1484,8 @@ def test_knob_parameters_refresh_moves_a_nonlinear_knob():
 def test_knob_parameters_teardown_restores_doubles():
     line = _knob_line()
     names = ["kqa", "kqb", "klink"]
-    knobs = KnobParameters(line, names,
-                           Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1))
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=names,
+                                           param_order=1))
     knobs.apply()
     knobs.teardown()
 
@@ -1505,7 +1505,7 @@ def test_parametric_track_matches_finite_differences():
     line = _fodo_knob_line()
     names = ["kqf", "kqd", "ksx"]
     descriptor = Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1)
-    knobs = KnobParameters(line, names, descriptor)
+    knobs = KnobParameters(line, descriptor)
     knobs.apply()
 
     m = _offaxis_map(truncation_order=2, descriptor=descriptor)
@@ -1759,9 +1759,7 @@ def test_tpsa_monitor_turns_are_absolute():
 def test_knob_parameter_length_validation_is_atomic():
     line = _knob_line()
     names = ["kqa", "kqb"]
-    knobs = KnobParameters(line, names,
-                           Descriptor(var_names=COORDS, order=2,
-                                      param_names=names))
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=names))
     baseline = [line[name] for name in names]
     with pytest.raises(ValueError, match="Exactly one value"):
         knobs.apply([0.1])
@@ -1777,7 +1775,7 @@ def test_knob_teardown_keeps_a_series_it_did_not_promote():
     line = env.new_line(components=[env.new('driven', xt.Quadrupole, length=1., k1='knob'),
                                     env.new('unrelated', xt.Quadrupole, length=1., k1=.1)])
     line['unrelated'].k1 = Descriptor(6, 1, param_names=2, param_order=1).param(2, .6)
-    knobs = KnobParameters(line, ['knob'], Descriptor(6, 1, param_names=1, param_order=1))
+    knobs = KnobParameters(line, Descriptor(6, 1, param_names=['knob'], param_order=1))
 
     knobs.apply()
     knobs.teardown()
@@ -1786,25 +1784,82 @@ def test_knob_teardown_keeps_a_series_it_did_not_promote():
     np.testing.assert_array_equal(line['unrelated'].k1.param_grad(), [0., 1.])
 
 
-def test_knob_teardown_keeps_the_dependence_on_another_set_of_knobs():
+def test_knob_parameters_refuse_a_reached_preenabled_element():
     env = xt.Environment()
-    env['a'] = .1
-    env['b'] = .2
-    line = env.new_line(components=[env.new('quad', xt.Quadrupole, length=1., k1='a + 2 * b')])
-    descriptor = Descriptor(6, 1, param_names=1, param_order=1)
-    knobs_a = KnobParameters(line, ['a'], descriptor)
-    knobs_b = KnobParameters(line, ['b'], descriptor)
-    knobs_a.apply()
-    knobs_b.apply()
+    env['knob'] = .3
+    line = env.new_line(components=[env.new('driven', xt.Quadrupole, length=1., k1='knob')])
+    line['driven'].k1s = Descriptor(6, 1, param_names=['other'], param_order=1).param(1, .1)
+    with pytest.raises(ValueError, match=r"already TPSA-enabled: \['driven'\]"):
+        KnobParameters(line, Descriptor(6, 1, param_names=['knob'], param_order=1))
 
-    knobs_a.teardown()
 
-    np.testing.assert_allclose(line['quad'].k1.param_grad(), [2.])
+def test_affine_knobs_match_the_exact_parameters():
+    names = ["kqf", "kqd", "ksx"]
+    descriptor = Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1)
+    exact_line, affine_line = _fodo_knob_line(), _fodo_knob_line()
+    exact = KnobParameters(exact_line, descriptor)
+    affine = KnobParameters(affine_line, descriptor, affine=True)
 
-    knobs_b.teardown()
+    def assert_same_series_and_map():
+        assert affine.driven_elements() == exact.driven_elements()
+        for name, field in exact.driven_elements():
+            series = getattr(affine_line.element_dict[name], field)
+            assert series.equals(getattr(exact_line.element_dict[name], field), tol=0.0)
+        exact_map = _offaxis_map(truncation_order=2, descriptor=descriptor)
+        affine_map = _offaxis_map(truncation_order=2, descriptor=descriptor)
+        exact_line.track(exact_map)
+        affine_line.track(affine_map)
+        for coord in COORDS:
+            assert getattr(affine_map, coord).equals(getattr(exact_map, coord), tol=0.0)
 
-    assert not line['quad']._tpsa_enabled
-    assert line['quad'].k1 == pytest.approx(.5)
+    exact.apply()
+    affine.apply()
+    assert_same_series_and_map()
+
+    exact.apply([0.021, -0.014, 2.5])
+    affine.apply([0.021, -0.014, 2.5])
+    assert_same_series_and_map()
+
+    exact.apply_doubles([0.019, -0.016, 3.5])
+    affine.apply_doubles([0.019, -0.016, 3.5])
+    assert not affine_line.element_dict["qf"]._tpsa_enabled
+    assert affine_line.element_dict["qf"].k1 == exact_line.element_dict["qf"].k1 == 0.019
+    exact.apply()
+    affine.apply()
+    assert_same_series_and_map()
+    exact.teardown()
+    affine.teardown()
+
+
+def test_affine_knobs_reuse_the_series_and_keep_floats_in_the_variables():
+    line = _fodo_knob_line()
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=["kqf"],
+                                            param_order=1), affine=True)
+    knobs.apply()
+    series = line.element_dict["qf"].k1
+    assert isinstance(line["kqf"], float)
+
+    knobs.apply_doubles([0.03])
+    assert line.element_dict["qf"].k1 == 0.03
+    knobs.apply()
+    assert line.element_dict["qf"].k1 is series
+    assert series.const_part == 0.03
+    assert series.param_grad() == [1.0]
+
+    knobs.teardown()
+    assert not line.element_dict["qf"]._tpsa_enabled
+    assert "_tpsa_cached_handles" not in line.element_dict["qf"].__dict__
+
+
+def test_affine_knobs_refuse_a_knob_assigned_while_parametric():
+    line = _fodo_knob_line()
+    knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=["kqf"],
+                                            param_order=1), affine=True)
+    knobs.apply()
+    line.vars["kqf"] = 0.03
+    with pytest.raises(RuntimeError, match="Series replaced"):
+        knobs.apply_doubles([0.03])
+    knobs.teardown()
 
 
 def test_knob_teardown_releases_every_element_a_shared_knob_promoted():
@@ -1812,7 +1867,7 @@ def test_knob_teardown_releases_every_element_a_shared_knob_promoted():
     env['knob'] = .3
     line = env.new_line(components=[env.new('first', xt.Quadrupole, length=1., k1='knob'),
                                     env.new('second', xt.Quadrupole, length=1., k1='knob')])
-    knobs = KnobParameters(line, ['knob'], Descriptor(6, 1, param_names=1, param_order=1))
+    knobs = KnobParameters(line, Descriptor(6, 1, param_names=['knob'], param_order=1))
 
     knobs.apply()
     knobs.teardown()
@@ -1825,7 +1880,7 @@ def test_knob_apply_moves_the_knob_and_keeps_its_derivative():
     env = xt.Environment()
     env['knob'] = .3
     line = env.new_line(components=[env.new('driven', xt.Quadrupole, length=1., k1='2 * knob')])
-    knobs = KnobParameters(line, ['knob'], Descriptor(6, 1, param_names=1, param_order=1))
+    knobs = KnobParameters(line, Descriptor(6, 1, param_names=['knob'], param_order=1))
     knobs.apply()
 
     knobs.apply([.5])
@@ -1839,24 +1894,6 @@ def test_knob_apply_refuses_the_wrong_number_of_values():
     env = xt.Environment()
     env['knob'] = .3
     line = env.new_line(components=[env.new('driven', xt.Quadrupole, length=1., k1='knob')])
-    knobs = KnobParameters(line, ['knob'], Descriptor(6, 1, param_names=1, param_order=1))
+    knobs = KnobParameters(line, Descriptor(6, 1, param_names=['knob'], param_order=1))
     with pytest.raises(ValueError, match='one value'):
         knobs.apply([.5, .6])
-
-
-def test_knob_teardown_keeps_a_dependence_that_starts_at_second_order():
-    env = xt.Environment()
-    env['a'] = .1
-    env['b'] = 0.
-    line = env.new_line(components=[env.new('quad', xt.Quadrupole, length=1., k1='a + b * b')])
-    descriptor = Descriptor(6, 2, param_names=1, param_order=2)
-    knobs_a = KnobParameters(line, ['a'], descriptor)
-    knobs_b = KnobParameters(line, ['b'], descriptor)
-    knobs_a.apply()
-    knobs_b.apply()
-
-    knobs_a.teardown()
-
-    assert line['quad']._tpsa_enabled
-    assert not line['quad'].k1.is_constant()
-    knobs_b.teardown()

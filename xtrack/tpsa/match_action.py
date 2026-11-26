@@ -15,7 +15,7 @@ import xtrack as xt
 
 from ..match import Action, TargetRelPhaseAdvance
 from ..twiss.twiss_init import _6d_w_matrix
-from ._knobs import KnobParameters, _scalar_value
+from .knobs import KnobParameters, _scalar_value
 from .particles import ParticlesTpsa, COORDS
 
 # Optics quantities served by TpsaOptics, orbit quantities by the map's param_jacobian.
@@ -160,7 +160,7 @@ class ActionTpsaTrack(Action):
             var_names=COORDS,
             order=self.plain_order
         )
-        self._knobs = KnobParameters(self.line, self.vary_names, self._descriptor)
+        self._knobs = KnobParameters(self.line, self._descriptor)
         self._knobs.apply()
         self._already_prepared = True
 

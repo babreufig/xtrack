@@ -16,5 +16,6 @@ kernel assembly. CPU only.
 
 from .particles import COORDS, ParticlesTpsa
 from .optics import TpsaOptics
+from .knobs import KnobParameters
 
-__all__ = ["COORDS", "ParticlesTpsa", "TpsaOptics"]
+__all__ = ["COORDS", "KnobParameters", "ParticlesTpsa", "TpsaOptics"]
