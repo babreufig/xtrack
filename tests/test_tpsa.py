@@ -387,6 +387,54 @@ def test_line_disable_tpsa_elements():
     assert line["q"].k1 == 0.125
 
 
+def test_disable_keep_series_then_reuse_matches_fresh_series():
+    descriptor = Descriptor(var_names=COORDS, order=2, param_names=1, param_order=1)
+    line = _line()
+    quad = line.element_dict["q"]
+    k1_series = 2.0 * descriptor.param(1, 0.0625)
+    quad.k1 = k1_series
+
+    quad.disable_tpsa(keep_series=True)
+    assert not quad._xobject._tpsa_enabled
+    assert quad.k1 == 0.125
+
+    quad.k1 = 0.3
+    quad.enable_tpsa(descriptor, reuse_cached=True)
+    assert quad.k1 is k1_series
+    assert quad.k1.const_part == 0.3
+    assert quad.k1.param_grad() == [2.0]
+
+    fresh_line = _line()
+    fresh_line.element_dict["q"].k1 = 2.0 * descriptor.param(1, 0.15)
+    reused, fresh = _map(2, descriptor), _map(2, descriptor)
+    line.track(reused)
+    fresh_line.track(fresh)
+    for coord in COORDS:
+        assert getattr(reused, coord).equals(getattr(fresh, coord), tol=0.0)
+
+
+def test_enable_reuse_cached_guards():
+    descriptor = Descriptor(var_names=COORDS, order=1, param_names=1, param_order=1)
+    other = Descriptor(var_names=COORDS, order=2, param_names=1, param_order=1)
+    quad = _line().element_dict["q"]
+    with pytest.raises(ValueError, match="No cached"):
+        quad.enable_tpsa(descriptor, reuse_cached=True)
+
+    quad.k1 = descriptor.param(1, 0.1)
+    with pytest.raises(ValueError, match="TPSA-disabled"):
+        quad.enable_tpsa(descriptor, reuse_cached=True)
+
+    quad.disable_tpsa(keep_series=True)
+    with pytest.raises(ValueError, match="another descriptor"):
+        quad.enable_tpsa(other, reuse_cached=True)
+    quad.enable_tpsa(descriptor, reuse_cached=True)
+
+    quad.disable_tpsa(keep_series=True)
+    quad.disable_tpsa()
+    with pytest.raises(ValueError, match="No cached"):
+        quad.enable_tpsa(descriptor, reuse_cached=True)
+
+
 def test_build_tracker_preserves_tpsa_enabled_elements_moved_to_common_buffer():
     ctx = xo.ContextCpu()
     buffer_a = ctx.new_buffer(capacity=1024)

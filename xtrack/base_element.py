@@ -593,7 +593,9 @@ class BeamElement(xo.HybridClass, metaclass=MetaBeamElement):
             self.__dict__.setdefault("_tpsa_handles", {})
             self.__dict__.setdefault("_tpsa_descriptor", None)
 
-    def enable_tpsa(self, descriptor_or_proto):
+    def enable_tpsa(self, descriptor_or_proto, reuse_cached=False):
+        """With ``reuse_cached``, restore the series kept by ``disable_tpsa(keep_series=True)``
+        and move their constant parts to the current field values."""
         if not isinstance(self._buffer.context, xo.ContextCpu):
             raise NotImplementedError(
                 "TPSA-enabled beam elements are only supported on CPU contexts")
@@ -601,11 +603,24 @@ class BeamElement(xo.HybridClass, metaclass=MetaBeamElement):
             descriptor = descriptor_or_proto.descriptor
         else:
             descriptor = descriptor_or_proto
+        cached = None
+        if reuse_cached:
+            if self._xobject._tpsa_enabled:
+                raise ValueError("reuse_cached needs a TPSA-disabled element")
+            cached_descriptor, cached = self.__dict__.get("_tpsa_cached_handles", (None, None))
+            if cached is None:
+                raise ValueError("No cached TPSA series to reuse")
+            if cached_descriptor != descriptor:
+                raise ValueError("Cached TPSA series belong to another descriptor")
+            del self.__dict__["_tpsa_cached_handles"]
         self.__dict__["_tpsa_descriptor"] = descriptor
         handles = {}
         for name in self._float_or_tpsa_fields:
             if self._xobject._tpsa_enabled:
                 value = getattr(self, name)
+            elif cached is not None:
+                value = cached[name]
+                value.const_part = getattr(self, name)
             else:
                 value = descriptor.constant(getattr(self, name))
             handles[name] = value
@@ -613,13 +628,22 @@ class BeamElement(xo.HybridClass, metaclass=MetaBeamElement):
         self.__dict__["_tpsa_handles"] = handles
         self._xobject._tpsa_enabled = 1
 
-    def disable_tpsa(self):
+    def disable_tpsa(self, keep_series=False):
+        """Put the constant parts back as doubles. ``keep_series`` keeps the series for
+        ``enable_tpsa(reuse_cached=True)``, otherwise any kept series are dropped."""
         if not getattr(self._xobject, "_tpsa_enabled", 0):
+            if not keep_series:
+                self.__dict__.pop("_tpsa_cached_handles", None)
             return
-        for name in self._float_or_tpsa_fields:
-            value = getattr(self, name)
+        handles = {name: getattr(self, name) for name in self._float_or_tpsa_fields}
+        for name, value in handles.items():
             setattr(self._xobject, name, float(value.const_part))
         self._xobject._tpsa_enabled = 0
+        if keep_series:
+            # The kept series own the memory the fields pointed to until now.
+            self.__dict__["_tpsa_cached_handles"] = (self.__dict__["_tpsa_descriptor"], handles)
+        else:
+            self.__dict__.pop("_tpsa_cached_handles", None)
         self.__dict__["_tpsa_handles"] = {}
         self.__dict__["_tpsa_descriptor"] = None
 
