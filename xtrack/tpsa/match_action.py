@@ -160,8 +160,7 @@ class ActionTpsaTrack(Action):
             var_names=COORDS,
             order=self.plain_order
         )
-        self._knobs = KnobParameters(self.line, self._descriptor)
-        self._knobs.apply()
+        self._knobs = KnobParameters(self.line, self._descriptor, affine=True)
         self._already_prepared = True
 
     def teardown(self):
@@ -170,6 +169,10 @@ class ActionTpsaTrack(Action):
             self._knobs.teardown()
             self._knobs = None
         self._already_prepared = False
+
+    def cleanup(self):
+        """Drop the kept knob series, called by ``OptimizeLine.solve`` at the end."""
+        self.teardown()
 
     def _seed_map(self, parametric=True):
         """Seed the actual canonical W matrix, including linear coupling."""
@@ -251,7 +254,7 @@ class ActionTpsaTrack(Action):
             return res
         finally:
             # xdeps reads the line variables after every action evaluation.
-            self._knobs.teardown()
+            self._knobs.apply_doubles(values)
 
     def _continuous_phases(self):
         """mux/muy per observed location, unwrapped vs the reference twiss (phase from
