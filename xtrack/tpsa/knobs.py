@@ -88,6 +88,13 @@ class KnobParameters:
                 name: {field: getattr(elements[name], field)
                        for field in elements[name]._float_or_tpsa_fields}
                 for name in self._reached}
+            # Floats in while enabled: a field driven by several knobs would get a Tpsa
+            # in between, which enables a disabled element again.
+            for name, value in zip(self.names, values, strict=True):
+                self.line.vars[name] = _scalar_value(value)
+            for name, kept in self._kept_series.items():
+                for field, series in kept.items():
+                    setattr(elements[name], field, series)
             self._keep_and_disable_series()
         elif self._applied:
             self._keep_and_disable_series()

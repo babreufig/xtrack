@@ -1831,6 +1831,46 @@ def test_affine_knobs_match_the_exact_parameters():
     affine.teardown()
 
 
+def test_affine_knobs_with_a_field_driven_by_two_knobs():
+    names = ["kqa", "kqb", "klink"]
+    descriptor = Descriptor(var_names=COORDS, order=2, param_names=names, param_order=1)
+    exact_line, affine_line = _knob_line(), _knob_line()
+    exact = KnobParameters(exact_line, descriptor)
+    affine = KnobParameters(affine_line, descriptor, affine=True)
+
+    for values in (None, [0.013, -0.021, 0.004]):
+        exact.apply(values)
+        affine.apply(values)
+        for name, field in exact.driven_elements():
+            series = getattr(affine_line.element_dict[name], field)
+            assert series.equals(getattr(exact_line.element_dict[name], field), tol=0.0)
+    assert affine_line.element_dict["mq1"].k1.param_grad() == [0.5, 1.0, 0.0]
+    exact.teardown()
+    affine.teardown()
+
+
+@pytest.mark.parametrize("applied", [True, False])
+def test_affine_knobs_teardown_with_a_field_driven_by_two_knobs(applied):
+    line = _knob_line()
+    descriptor = Descriptor(var_names=COORDS, order=2, param_names=["kqa", "kqb", "klink"],
+                            param_order=1)
+    knobs = KnobParameters(line, descriptor, affine=True)
+    knobs.apply([0.013, -0.021, 0.004])
+    if not applied:
+        knobs.apply_doubles([0.014, -0.022, 0.005])
+    knobs.teardown()
+
+    kqa, kqb = line.vars.val["kqa"], line.vars.val["kqb"]
+    assert all(isinstance(line.vars.val[name], float) for name in ("kqa", "kqb", "klink"))
+    for name in ("mq1", "mq2", "mq3"):
+        element = line.element_dict[name]
+        assert not element._tpsa_enabled
+        assert "_tpsa_cached_handles" not in element.__dict__
+    assert line.element_dict["mq1"].k1 == 0.5 * kqa + kqb
+    # A clean line takes a new set of knobs.
+    KnobParameters(line, descriptor).apply()
+
+
 def test_affine_knobs_reuse_the_series_and_keep_floats_in_the_variables():
     line = _fodo_knob_line()
     knobs = KnobParameters(line, Descriptor(var_names=COORDS, order=2, param_names=["kqf"],
@@ -1860,6 +1900,64 @@ def test_affine_knobs_refuse_a_knob_assigned_while_parametric():
     with pytest.raises(RuntimeError, match="Series replaced"):
         knobs.apply_doubles([0.03])
     knobs.teardown()
+
+
+def _fodo_cell():
+    """Periodic FODO cell, qd driven by both knobs."""
+    env = xt.Environment()
+    env["kqf"] = 0.3
+    env["kqd"] = -0.3
+    line = env.new_line(components=[
+        env.new("qf", xt.Quadrupole, length=0.5, k1="kqf"),
+        env.new("d0", xt.Drift, length=2.0),
+        env.new("qd", xt.Quadrupole, length=0.5, k1="kqd + 0.1 * kqf"),
+        env.new("d1", xt.Drift, length=2.0),
+        env.new("end", xt.Marker),
+    ])
+    line.particle_ref = xt.Particles(p0c=P0C, mass0=MASS0)
+    line.twiss_default["method"] = "4d"
+    line.build_tracker()
+    return line
+
+
+def test_tpsa_match_with_affine_knobs_matches_the_exact_parameters(monkeypatch):
+    import functools
+    import xtrack.tpsa.match_action as match_action
+
+    line = _fodo_cell()
+    tw0 = line.twiss()
+    line.vars["kqf"], line.vars["kqd"] = 0.31, -0.29
+    target = line.twiss(init=tw0, start="qf", end="end")
+
+    def solve():
+        line.vars["kqf"], line.vars["kqd"] = 0.3, -0.3
+        opt = line.match(
+            solve=False, start="qf", end="end", init=tw0, init_at=xt.START,
+            vary=xt.VaryList(["kqf", "kqd"]),
+            targets=xt.TargetSet(at="end", betx=target["betx", "end"],
+                                 bety=target["bety", "end"]),
+            use_tpsa=True, tpsa_backend="madng_tpsa")
+        action = opt.actions[0]
+        opt.step(1)
+        # Between steps the series are kept and the elements hold doubles.
+        assert action._knobs.affine == (action._knobs._kept_series is not None)
+        assert not action._knobs.applied
+        assert not line.element_dict["qd"]._tpsa_enabled
+        opt.solve()
+        # solve() calls cleanup(), which drops the kept series.
+        assert action._knobs is None
+        assert not line.element_dict["qd"]._tpsa_enabled
+        assert all(isinstance(line.vars.val[name], float) for name in ("kqf", "kqd"))
+        return [line.vars.val["kqf"], line.vars.val["kqd"]], opt.log().penalty
+
+    affine_knobs, affine_penalty = solve()
+    monkeypatch.setattr(match_action, "KnobParameters",
+                        functools.partial(KnobParameters, affine=False))
+    exact_knobs, exact_penalty = solve()
+
+    xo.assert_allclose(affine_knobs, exact_knobs, rtol=0, atol=0)
+    xo.assert_allclose(affine_penalty, exact_penalty, rtol=0, atol=0)
+    xo.assert_allclose(affine_knobs, [0.31, -0.29], rtol=0, atol=1e-10)
 
 
 def test_knob_teardown_releases_every_element_a_shared_knob_promoted():
